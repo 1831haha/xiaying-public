@@ -1,8 +1,10 @@
 package com.movieshell.data.source
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -123,31 +125,12 @@ class EpgFetcherTest {
         assertEquals("源B节目", EpgFetcher.parse(xmlB, "CCTV-1").first?.title)
     }
 
-    @Test
-    fun resolveEpgUrl() {
-        assertEquals(
-            "https://a.example.com/epg.xml",
-            EpgFetcher.resolveEpgUrl("https://a.example.com/epg.xml", "https://g.example.com/epg.xml"),
-        )
-        assertEquals(
-            "https://g.example.com/epg.xml",
-            EpgFetcher.resolveEpgUrl("", "https://g.example.com/epg.xml"),
-        )
-        assertEquals(
-            "https://g.example.com/epg.xml",
-            EpgFetcher.resolveEpgUrl("   ", "https://g.example.com/epg.xml"),
-        )
-        assertEquals(
-            "https://g.example.com/epg.xml",
-            EpgFetcher.resolveEpgUrl(null, "https://g.example.com/epg.xml"),
-        )
-        assertEquals("", EpgFetcher.resolveEpgUrl("", ""))
-        // 本源已配但拉取失败/匹配不到时，调用方返回 (null, null)，不回落全局——
-        // 锁定解析层只认“本源空才用全局”这一条。
-        assertEquals(
-            "https://a.example.com/epg.xml",
-            EpgFetcher.resolveEpgUrl("https://a.example.com/epg.xml", "https://g.example.com/epg.xml"),
-        )
+    // v1.4.11：resolveEpgUrl 已删，地址选择收进 nowAndNextWithFallback，
+    // 旧口径“本源已配但失败时不回落全局”随之作废，见下方回落分层用例。
+
+    @Before
+    fun setUp() {
+        EpgFetcher.resetCircuitBreakerForTest()
     }
 
     @Test
@@ -157,5 +140,126 @@ class EpgFetcherTest {
         assertEquals(null to null, EpgFetcher.parse(xml, "   "))
         assertFalse(EpgFetcher.epgNameMatches("", "CCTV-1"))
         assertFalse(EpgFetcher.epgNameMatches("CCTV", ""))
+    }
+
+    // v1.4.11 第 1 步：熔断——按 URL 记连续下载失败，3 次后 30 分钟内跳过网络。
+
+    @Test
+    fun breakerBlocksAfterThreeConsecutiveFailures() {
+        val url = "https://dead.example.com/epg.xml"
+        val t = 1_000_000L
+        EpgFetcher.recordDownloadFailure(url, t)
+        EpgFetcher.recordDownloadFailure(url, t)
+        assertFalse(EpgFetcher.isBlocked(url, t))
+        EpgFetcher.recordDownloadFailure(url, t)
+        assertTrue(EpgFetcher.isBlocked(url, t))
+        // 别的 URL 不受影响。
+        assertFalse(EpgFetcher.isBlocked("https://other.example.com/epg.xml", t))
+    }
+
+    @Test
+    fun breakerSuccessResetsCount() {
+        val url = "https://flaky.example.com/epg.xml"
+        val t = 1_000_000L
+        EpgFetcher.recordDownloadFailure(url, t)
+        EpgFetcher.recordDownloadFailure(url, t)
+        EpgFetcher.recordDownloadSuccess(url)
+        EpgFetcher.recordDownloadFailure(url, t)
+        EpgFetcher.recordDownloadFailure(url, t)
+        assertFalse(EpgFetcher.isBlocked(url, t))
+        EpgFetcher.recordDownloadFailure(url, t)
+        assertTrue(EpgFetcher.isBlocked(url, t))
+    }
+
+    @Test
+    fun breakerExpiresAfterThirtyMinutes() {
+        val url = "https://dead.example.com/epg.xml"
+        val t = 1_000_000L
+        repeat(3) { EpgFetcher.recordDownloadFailure(url, t) }
+        assertTrue(EpgFetcher.isBlocked(url, t + 29 * 60 * 1000L))
+        assertFalse(EpgFetcher.isBlocked(url, t + 30 * 60 * 1000L))
+        // 过期后下一次失败重新从 1 开始计，不立即再封。
+        EpgFetcher.recordDownloadFailure(url, t + 30 * 60 * 1000L)
+        assertFalse(EpgFetcher.isBlocked(url, t + 30 * 60 * 1000L))
+    }
+
+    // v1.4.11 第 1 步：回落分层——本源命中不碰全局，本源空结果才试全局。
+
+    private val nowProgram = EpgFetcher.Program("新闻联播", 1_000L, 2_000L)
+    private val nextProgram = EpgFetcher.Program("天气预报", 2_000L, 3_000L)
+    private val channelUrl = "https://a.example.com/epg.xml"
+    private val globalUrl = "https://g.example.com/epg.xml"
+
+    @Test
+    fun fallbackChannelHitDoesNotTouchGlobal() = runBlocking {
+        val calls = mutableListOf<String>()
+        val result = EpgFetcher.nowAndNextWithFallback(channelUrl, globalUrl, "CCTV-1") { url, _ ->
+            calls += url
+            nowProgram to nextProgram
+        }
+        assertEquals(EpgFetcher.EpgLayer.CHANNEL, result.layer)
+        assertEquals("新闻联播", result.programs.first?.title)
+        assertEquals(listOf(channelUrl), calls)
+    }
+
+    @Test
+    fun fallbackChannelMissTriesGlobal() = runBlocking {
+        val calls = mutableListOf<String>()
+        val result = EpgFetcher.nowAndNextWithFallback(channelUrl, globalUrl, "CCTV-1") { url, _ ->
+            calls += url
+            if (url == channelUrl) null to null else nowProgram to nextProgram
+        }
+        assertEquals(EpgFetcher.EpgLayer.GLOBAL, result.layer)
+        assertEquals("新闻联播", result.programs.first?.title)
+        assertEquals(listOf(channelUrl, globalUrl), calls)
+    }
+
+    @Test
+    fun fallbackBothMissReturnsNone() = runBlocking {
+        val calls = mutableListOf<String>()
+        val result = EpgFetcher.nowAndNextWithFallback(channelUrl, globalUrl, "CCTV-1") { url, _ ->
+            calls += url
+            null to null
+        }
+        assertEquals(EpgFetcher.EpgLayer.NONE, result.layer)
+        assertEquals(null to null, result.programs)
+        assertEquals(listOf(channelUrl, globalUrl), calls)
+    }
+
+    @Test
+    fun fallbackBlankChannelTriesGlobalDirectly() = runBlocking {
+        // 空串、空白、null 三种“未配”都直接试全局（旧 resolveEpgUrl 单测锁过的口径）。
+        for (blank in listOf("", "   ", null)) {
+            val calls = mutableListOf<String>()
+            val result = EpgFetcher.nowAndNextWithFallback(blank, globalUrl, "CCTV-1") { url, _ ->
+                calls += url
+                nowProgram to nextProgram
+            }
+            assertEquals("本源=$blank", EpgFetcher.EpgLayer.GLOBAL, result.layer)
+            assertEquals(listOf(globalUrl), calls)
+        }
+    }
+
+    @Test
+    fun fallbackSameUrlFetchedOnce() = runBlocking {
+        val calls = mutableListOf<String>()
+        val result = EpgFetcher.nowAndNextWithFallback(channelUrl, channelUrl, "CCTV-1") { url, _ ->
+            calls += url
+            nowProgram to nextProgram
+        }
+        assertEquals(EpgFetcher.EpgLayer.CHANNEL, result.layer)
+        assertEquals(listOf(channelUrl), calls)
+    }
+
+    @Test
+    fun fallbackChannelOnlyNowCountsAsHit() = runBlocking {
+        // 只有当前节目、没有下一档，也算本源命中，不再试全局。
+        val calls = mutableListOf<String>()
+        val result = EpgFetcher.nowAndNextWithFallback(channelUrl, globalUrl, "CCTV-1") { url, _ ->
+            calls += url
+            nowProgram to null
+        }
+        assertEquals(EpgFetcher.EpgLayer.CHANNEL, result.layer)
+        assertEquals(listOf(channelUrl), calls)
     }
 }

@@ -38,6 +38,15 @@ object EpgFetcher {
         val desc: String = "",
     )
 
+    /** v1.4.11 第 1 步：节目单命中层——本源 / 全局兜底 / 都没命中。 */
+    enum class EpgLayer { CHANNEL, GLOBAL, NONE }
+
+    /** v1.4.11 第 1 步：节目单 + 命中层。 */
+    data class EpgResult(
+        val programs: Pair<Program?, Program?>,
+        val layer: EpgLayer,
+    )
+
     /** v0.188.0 M29：EPG 单文件下载上限 20MB，超限直接失败，不全量进内存。 */
     private const val MAX_EPG_BYTES = 20L * 1024L * 1024L
 
@@ -54,6 +63,13 @@ object EpgFetcher {
     internal fun setCacheDir(dir: File) {
         cacheDir = dir
     }
+
+    /** v1.4.11 熔断：连续 3 次下载失败后，30 分钟内跳过该 URL 的网络请求。 */
+    internal const val BREAKER_MAX_FAILURES = 3
+    internal const val BREAKER_BLOCK_MS = 30 * 60 * 1000L
+    private val breakerLock = Any()
+    private val breakerFailures = mutableMapOf<String, Int>()
+    private val breakerBlockedUntil = mutableMapOf<String, Long>()
 
     // v0.217.0（F21）：SimpleDateFormat 不是线程安全的，原来是共享单例，
     // 直播页与频道详情并发查节目单时会互相干扰、个别节目时间算错或被
@@ -98,10 +114,7 @@ object EpgFetcher {
         withContext(Dispatchers.IO) {
             runCatching {
                 // 当天缓存命中直接解析，不发网络请求。
-                val bytes = readCache(epgUrl)
-                    ?: withTimeoutOrNull(10_000) { downloadBytes(epgUrl) }
-                        ?.also { writeCache(epgUrl, it) }
-                    ?: return@runCatching null to null
+                val bytes = fetchBytes(epgUrl) ?: return@runCatching null to null
                 // v0.158.0：.xml.gz 这类压缩包尽力解压（gzip 魔数 1f 8b），
                 // 普通 XML 直接按 UTF-8 解；解不开返回 (null, null)，不崩。
                 val xml = if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
@@ -112,16 +125,113 @@ object EpgFetcher {
                     bytes.toString(Charsets.UTF_8)
                 }
                 parse(xml, channelName.trim())
-            }.getOrDefault(null to null)
+                // v1.4.11 审稿 M1：取消必须透传——runCatching 会吞
+                // CancellationException，切台取消在途拉取时，旧 effect 须直接
+                // 退出、不把过期状态写回；超时仍按原样返回 (null, null)。
+            }.getOrElse { if (it is CancellationException) throw it else null to null }
         }
 
     /**
-     * v1.4.8 A3(c)：EPG 地址解析——本源 epgUrl 非空即用本源，仅本源
-     * 未配置（空/空白）时用全局兜底；本源已配但拉取失败或匹配不到时
-     * 调用方返回 (null, null)，不回落全局。
+     * v1.4.11 第 1 步：本源失效自动回落全局。
+     * 本源地址非空先试本源：下载失败或匹配不到（两档都没有）都算本源失效，
+     * 再试全局；全局也无结果返回 (null, null)。本源未配直接试全局。
+     * 返回命中层，供调用方只在兜底命中时打“全局”小标。
+     * fetch 参数是测试缝：单测注入假拉取、验分层选择；线上默认走 nowAndNext。
      */
-    internal fun resolveEpgUrl(channelEpgUrl: String?, globalEpgUrl: String): String =
-        if (!channelEpgUrl.isNullOrBlank()) channelEpgUrl else globalEpgUrl
+    suspend fun nowAndNextWithFallback(
+        channelEpgUrl: String?,
+        globalEpgUrl: String,
+        channelName: String,
+        fetch: suspend (String, String) -> Pair<Program?, Program?> = { url, name -> nowAndNext(url, name) },
+    ): EpgResult {
+        val channelUrl = channelEpgUrl?.takeIf { it.isNotBlank() }
+        if (channelUrl != null) {
+            val r = fetch(channelUrl, channelName)
+            if (r.first != null || r.second != null) return EpgResult(r, EpgLayer.CHANNEL)
+        }
+        val globalUrl = globalEpgUrl.takeIf { it.isNotBlank() && it != channelUrl }
+        if (globalUrl != null) {
+            val r = fetch(globalUrl, channelName)
+            if (r.first != null || r.second != null) return EpgResult(r, EpgLayer.GLOBAL)
+        }
+        return EpgResult(null to null, EpgLayer.NONE)
+    }
+
+    /**
+     * v1.4.11 第 1 步：取 EPG 字节——先读当日缓存，再看熔断，最后才联网。
+     * 熔断时跳过网络、只用缓存（无缓存即返回 null）；下载失败记一次，
+     * 成功清零。取消异常原样重抛，不记失败。
+     */
+    private suspend fun fetchBytes(epgUrl: String): ByteArray? {
+        readCache(epgUrl)?.let { return it }
+        if (isBlocked(epgUrl)) {
+            LogBus.d(TAG, "EPG 熔断跳过网络 host=${epgHost(epgUrl)}")
+            return null
+        }
+        return try {
+            withTimeoutOrNull(10_000) { downloadBytes(epgUrl) }?.also {
+                recordDownloadSuccess(epgUrl)
+                writeCache(epgUrl, it)
+            } ?: run {
+                recordDownloadFailure(epgUrl)
+                null
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            recordDownloadFailure(epgUrl)
+            null
+        }
+    }
+
+    /** v1.4.11 熔断：只记 host，不打完整 URL。 */
+    private fun epgHost(url: String): String =
+        runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
+
+    /**
+     * v1.4.11 熔断：按 EPG URL 记连续下载失败，3 次后 30 分钟内跳过网络。
+     * 只算下载失败（超时/HTTP 错/异常），不算“下载成功但没匹配到台名”——
+     * 后者可能是这台名不在该 EPG 里，不能因此封掉整条地址；且下载成功已写
+     * 当日缓存，后续查直接读盘，不重复耗网络。
+     */
+    internal fun recordDownloadFailure(url: String, nowMs: Long = System.currentTimeMillis()) {
+        synchronized(breakerLock) {
+            val n = (breakerFailures[url] ?: 0) + 1
+            if (n >= BREAKER_MAX_FAILURES) {
+                breakerFailures.remove(url)
+                breakerBlockedUntil[url] = nowMs + BREAKER_BLOCK_MS
+                LogBus.d(TAG, "EPG 熔断 host=${epgHost(url)} 连续失败 $n 次，30 分钟内跳过网络")
+            } else {
+                breakerFailures[url] = n
+            }
+        }
+    }
+
+    internal fun recordDownloadSuccess(url: String) {
+        synchronized(breakerLock) {
+            breakerFailures.remove(url)
+            breakerBlockedUntil.remove(url)
+        }
+    }
+
+    internal fun isBlocked(url: String, nowMs: Long = System.currentTimeMillis()): Boolean =
+        synchronized(breakerLock) {
+            val until = breakerBlockedUntil[url] ?: return@synchronized false
+            if (until <= nowMs) {
+                breakerBlockedUntil.remove(url)
+                false
+            } else {
+                true
+            }
+        }
+
+    /** 单测用：清空熔断状态，测例间互不干扰。 */
+    internal fun resetCircuitBreakerForTest() {
+        synchronized(breakerLock) {
+            breakerFailures.clear()
+            breakerBlockedUntil.clear()
+        }
+    }
 
     /**
      * v1.4.8 A3(b)：频道名归一化——去空白、去 -、去“高清/HD/超清”

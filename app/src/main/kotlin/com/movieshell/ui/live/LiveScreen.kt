@@ -494,15 +494,19 @@ fun LiveScreen(
     }
 
     // EPG：当前节目 + 下一档（节目信息卡用）；
-    // v0.158.0：本源无 epg 时用全局兜底（用户自填，不内置源），仍无则 null
+    // v1.4.11 第 1 步：本源失效自动回落全局（用户自填，不内置源），仍无则 null；
+    // 兜底命中时节目卡打“全局”小标。
     var epg by remember { mutableStateOf<Pair<EpgFetcher.Program?, EpgFetcher.Program?>?>(null) }
+    var epgFromGlobal by remember { mutableStateOf(false) }
     LaunchedEffect(selected, globalEpg) {
         val ch = selected
-        val src = EpgFetcher.resolveEpgUrl(ch?.epgUrl, globalEpg)
-        epg = if (ch != null && src.isNotBlank()) {
-            EpgFetcher.nowAndNext(src, ch.name)
+        if (ch == null) {
+            epg = null
+            epgFromGlobal = false
         } else {
-            null
+            val result = EpgFetcher.nowAndNextWithFallback(ch.epgUrl, globalEpg, ch.name)
+            epg = result.programs.takeIf { it.first != null || it.second != null }
+            epgFromGlobal = result.layer == EpgFetcher.EpgLayer.GLOBAL
         }
     }
 
@@ -648,6 +652,7 @@ fun LiveScreen(
             ProgramInfoCard(
                 channel = playing,
                 epg = epg,
+                epgFromGlobal = epgFromGlobal,
                 hasEpgSource = (playing?.epgUrl?.isNotBlank() == true || globalEpg.isNotBlank()),
                 isFavorite = channels.firstOrNull { it.id == playing?.id }?.favorite == true,
                 onSearchClick = { showSearch = !showSearch },
@@ -1073,6 +1078,8 @@ private fun LiveSettingsSheet(
 private fun ProgramInfoCard(
     channel: LiveChannel?,
     epg: Pair<EpgFetcher.Program?, EpgFetcher.Program?>?,
+    // v1.4.11 第 1 步：节目单来自全局兜底时打“全局”小标（仅兜底命中时）。
+    epgFromGlobal: Boolean = false,
     hasEpgSource: Boolean = true,
     // v0.176.0：顶栏去掉后，搜索/收藏/设置移到这张卡右侧（对标 DS 频道头齿轮+爱心）
     isFavorite: Boolean = false,
@@ -1101,7 +1108,8 @@ private fun ProgramInfoCard(
             Column(modifier = Modifier.weight(1f)) {
                 if (now != null) {
                     Text(
-                        text = "正在播 · ${timeFmt.format(Date(now.startMs))}–${timeFmt.format(Date(now.stopMs))}",
+                        text = "正在播" + (if (epgFromGlobal) " · 全局" else "") +
+                            " · ${timeFmt.format(Date(now.startMs))}–${timeFmt.format(Date(now.stopMs))}",
                         style = MaterialTheme.typography.labelLarge,
                         color = v.primary,
                         maxLines = 1,
@@ -1168,11 +1176,20 @@ private fun ProgramInfoCard(
                 )
             }
         }
-        if (next != null || sourceCount > 1) {
+        // v1.4.11 审稿 S1：有正在播、无下一档时也要显示“暂无下一档信息”，
+        // 不只多源时才显示（单源无下一档是常见情况）。
+        if (next != null || now != null || sourceCount > 1) {
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 8.dp)) {
                 Text(
-                    text = if (next != null) "下一档 ${timeFmt.format(Date(next.startMs))} ${next.title}" else (channel?.name ?: ""),
+                    text = if (next != null) {
+                        "下一档" + (if (epgFromGlobal && now == null) " · 全局" else "") +
+                            " ${timeFmt.format(Date(next.startMs))} ${next.title}"
+                    } else if (now != null) {
+                        "暂无下一档信息"
+                    } else {
+                        (channel?.name ?: "")
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = v.onSurfaceVariant,
                     maxLines = 1,
@@ -1388,14 +1405,17 @@ private fun ChannelDetailSheet(
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var epg by remember(channel.id) { mutableStateOf<Pair<EpgFetcher.Program?, EpgFetcher.Program?>?>(null) }
+    // v1.4.11 第 1 步：节目单来自全局兜底时打“全局”小标（仅兜底命中时）。
+    var epgFromGlobal by remember(channel.id) { mutableStateOf(false) }
     var epgLoading by remember(channel.id) { mutableStateOf(false) }
     val globalEpgDetail by LiveStore.globalEpg.collectAsState()
 
     LaunchedEffect(channel.id, globalEpgDetail) {
-        val src = EpgFetcher.resolveEpgUrl(channel.epgUrl, globalEpgDetail)
-        if (src.isNotBlank()) {
+        if (channel.epgUrl.isNotBlank() || globalEpgDetail.isNotBlank()) {
             epgLoading = true
-            epg = EpgFetcher.nowAndNext(src, channel.name)
+            val result = EpgFetcher.nowAndNextWithFallback(channel.epgUrl, globalEpgDetail, channel.name)
+            epg = result.programs.takeIf { it.first != null || it.second != null }
+            epgFromGlobal = result.layer == EpgFetcher.EpgLayer.GLOBAL
             epgLoading = false
         }
     }
@@ -1471,7 +1491,7 @@ private fun ChannelDetailSheet(
             // EPG：当前 + 后续（尽力展示）
             if (channel.epgUrl.isNotBlank() || globalEpgDetail.isNotBlank()) {
                 Text(
-                    "节目单",
+                    if (epgFromGlobal) "节目单 · 全局" else "节目单",
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Bold,
                 )
@@ -1491,6 +1511,13 @@ private fun ChannelDetailSheet(
                             Text(
                                 "接下来：${p.title}（${timeFmt.format(Date(p.startMs))}）",
                                 style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (epg?.first != null && epg?.second == null) {
+                            Text(
+                                "暂无下一档信息",
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
