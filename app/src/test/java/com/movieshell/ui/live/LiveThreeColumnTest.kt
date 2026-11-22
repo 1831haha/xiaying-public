@@ -217,4 +217,39 @@ class LiveThreeColumnTest {
         assertFalse(shouldFallbackToAll("全部频道", inDrama))
         assertFalse(shouldFallbackToAll(null, inDrama))
     }
+
+    @Test
+    fun liveScopeChannels_literalUngroupedGroup() {
+        val blank = LiveChannel(id = "a|u1", name = "无分组台", url = "u1", sourceKey = "a", group = "")
+        val literal = LiveChannel(id = "a|u2", name = "字面未分组台", url = "u2", sourceKey = "a", group = "未分组")
+        val movie = LiveChannel(id = "a|u3", name = "电影A", url = "u3", sourceKey = "a", group = "电影")
+        val rows = listOf(blank, literal, movie)
+        // 审稿 M1：字面「未分组」与空串分组是同一范围，都进未分组
+        assertEquals(listOf(blank, literal), liveScopeChannels(rows, "未分组"))
+        assertEquals(listOf(movie), liveScopeChannels(rows, "电影"))
+        // 左列只出现一次未分组项，计数两台
+        assertEquals(listOf("全部频道", "电影", "未分组"), liveGroupNames(rows))
+        assertEquals(
+            mapOf("全部频道" to 3, "电影" to 1, "未分组" to 2),
+            liveGroupCounts(rows, liveGroupNames(rows)),
+        )
+        // 回落到字面未分组台时不切回全部频道
+        assertFalse(shouldFallbackToAll("未分组", literal))
+        assertFalse(shouldFallbackToAll("未分组", blank))
+        assertTrue(shouldFallbackToAll("未分组", movie))
+        // 在电影分组回落到字面未分组台：切到全部频道
+        assertTrue(shouldFallbackToAll("电影", literal))
+    }
+
+    @Test
+    fun liveGroupNames_skipsLiteralUpdateTimeGroup() {
+        val stamp = LiveChannel(id = "a|u1", name = "20261122 07:59", url = "u1", sourceKey = "a", group = "更新时间")
+        val cctv1 = LiveChannel(id = "a|u2", name = "CCTV1", url = "u2", sourceKey = "a", group = "央视频道")
+        val rows = listOf(stamp, cctv1)
+        // 审稿 S1：字面「更新时间」分组不出现在左列（标签已被刷新入口占用）
+        assertEquals(listOf("全部频道", "央视频道"), liveGroupNames(rows))
+        // 该频道仍在全部频道里，不丢
+        assertEquals(rows, liveScopeChannels(rows, "全部频道"))
+        assertEquals(2, liveGroupCounts(rows, liveGroupNames(rows))["全部频道"])
+    }
 }

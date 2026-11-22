@@ -888,6 +888,9 @@ internal const val LIVE_TAB_FAVORITES = "我的收藏"
 /** v1.4.17：恢复分组后左列多一项“未分组”（group-title 为空串的频道归到这里）。 */
 internal const val LIVE_GROUP_UNGROUPED = "未分组"
 
+/** v1.4.17 审稿 S1：M3U 自带的字面分组「更新时间」（CCSH 的时间戳频道）不在左列出现——该标签已被顶部的刷新入口占用；频道仍在「全部频道」里。 */
+internal const val LIVE_GROUP_UPDATE_TIME = "更新时间"
+
 /**
  * v1.4.14 三列：中列按台名去重，每台只显示一条——显示的是该台上次选的源，
  * 没选过才取第一条；记的源 id 已失效也回落第一条。纯函数，可单测。
@@ -907,21 +910,23 @@ internal fun distinctChannelsGlobally(
  * v1.4.17：左列顺序——全部频道（默认首选）／我的收藏（仅有收藏时）／
  * 真实分组按 group-title 在 filtered 里首次出现的顺序（即 M3U 自身顺序，
  * 与 DS 左列一致）／未分组（仅有无分组频道时，排最后）。不排序、不把
- * “央视”特殊置顶。纯函数，可单测。
+ * “央视”特殊置顶。审稿 S1：字面分组「更新时间」跳过（标签已被刷新入口
+ * 占用）。纯函数，可单测。
  */
 internal fun liveGroupNames(channels: List<LiveChannel>): List<String> {
     val names = mutableListOf(LIVE_TAB_ALL)
     if (channels.any { it.favorite }) names += LIVE_TAB_FAVORITES
     val groups = channels.map { it.group.ifBlank { LIVE_GROUP_UNGROUPED } }.distinct()
-    names += groups.filter { it != LIVE_GROUP_UNGROUPED }
+    names += groups.filter { it != LIVE_GROUP_UNGROUPED && it != LIVE_GROUP_UPDATE_TIME }
     if (LIVE_GROUP_UNGROUPED in groups) names += LIVE_GROUP_UNGROUPED
     return names
 }
 
 /**
  * v1.4.17：中列范围按当前左列选中项取——全部频道取全量、我的收藏取收藏
- * 子集、真实分组取该组、未分组取无分组频道；selectedGroup 首帧为 null
- * 时走全部频道，不闪退。纯函数，可单测。
+ * 子集、真实分组取该组、未分组取无分组频道（含 group-title 字面就是
+ * 「未分组」的频道，审稿 M1）；selectedGroup 首帧为 null 时走全部频道，
+ * 不闪退。纯函数，可单测。
  */
 internal fun liveScopeChannels(
     channels: List<LiveChannel>,
@@ -929,7 +934,7 @@ internal fun liveScopeChannels(
 ): List<LiveChannel> = when (selectedGroup) {
     LIVE_TAB_FAVORITES -> channels.filter { it.favorite }
     LIVE_TAB_ALL, null -> channels
-    LIVE_GROUP_UNGROUPED -> channels.filter { it.group.isBlank() }
+    LIVE_GROUP_UNGROUPED -> channels.filter { it.group.ifBlank { LIVE_GROUP_UNGROUPED } == LIVE_GROUP_UNGROUPED }
     else -> channels.filter { it.group.ifBlank { LIVE_GROUP_UNGROUPED } == selectedGroup }
 }
 
@@ -947,13 +952,14 @@ internal fun liveGroupCounts(
 /**
  * v1.4.17：hideSourceByUrl 回落规则——回落的台不在当前左列范围里才切
  * 到全部频道，否则不动；收藏 tab 旧行为（回落到未收藏的台才切）是这条
- * 规则的特例。纯函数，可单测。
+ * 规则的特例。审稿 M1：未分组分支同样按 ifBlank 归一化再比，回落到字面
+ * 「未分组」的台时不再误切。纯函数，可单测。
  */
 internal fun shouldFallbackToAll(selectedGroup: String?, fallback: LiveChannel): Boolean {
     if (selectedGroup == null || selectedGroup == LIVE_TAB_ALL) return false
     return when (selectedGroup) {
         LIVE_TAB_FAVORITES -> !fallback.favorite
-        LIVE_GROUP_UNGROUPED -> fallback.group.isNotBlank()
+        LIVE_GROUP_UNGROUPED -> fallback.group.ifBlank { LIVE_GROUP_UNGROUPED } != LIVE_GROUP_UNGROUPED
         else -> fallback.group.ifBlank { LIVE_GROUP_UNGROUPED } != selectedGroup
     }
 }
