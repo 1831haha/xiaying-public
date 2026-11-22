@@ -56,6 +56,12 @@ data class LiveChannel(
     val ua: String = "",
     val referer: String = "",
     val epgUrl: String = "",
+    /**
+     * v1.4.12 第 2 步：列表级 EPG（#EXTM3U x-tvg-url），频道无 epg 属性时用。
+     * 与 epgUrl 分开存——订阅级 EPG 优先于它，合并不了就排不了序；
+     * 老缓存 JSON 缺字段时取默认值，刷新后回填。
+     */
+    val playlistEpgUrl: String = "",
     val favorite: Boolean = false,
     /** manual / m3u:<订阅名> / plugin:<文件名> */
     val sourceKey: String = "",
@@ -78,6 +84,8 @@ data class LiveSource(
     val type: String = "M3U_URL",
     /** 地址或本地绝对路径 */
     val url: String = "",
+    /** v1.4.12 第 2 步：该订阅的节目单地址（用户自填），空则用列表自带的 */
+    val epg: String = "",
 ) {
     companion object {
         const val M3U_URL = "M3U_URL"
@@ -105,6 +113,7 @@ object LiveStore {
     private const val KEY_MANUAL = "live_manual"
     private const val KEY_FAVS = "live_favs"
     private const val KEY_GLOBAL_EPG = "live_global_epg"
+    private const val KEY_FOLLOW_SOURCE_EPG = "live_follow_source_epg"
 
     private val _channels = MutableStateFlow<List<LiveChannel>>(emptyList())
     val channels: StateFlow<List<LiveChannel>> = _channels
@@ -117,6 +126,11 @@ object LiveStore {
     private val _globalEpg = MutableStateFlow("")
     val globalEpg: StateFlow<String> = _globalEpg
 
+    // v1.4.12 第 2 步：跟随电视源的 EPG（默认开，仿 globalEpg 的 KEY＋StateFlow
+    // 写法）；关时不用电视源自带的节目单，只用全局兜底。
+    private val _followSourceEpg = MutableStateFlow(true)
+    val followSourceEpg: StateFlow<Boolean> = _followSourceEpg
+
     private var inited = false
 
     @Synchronized
@@ -125,6 +139,7 @@ object LiveStore {
         inited = true
         _sources.value = readSources(context)
         _globalEpg.value = prefs(context).getString(KEY_GLOBAL_EPG, "").orEmpty()
+        _followSourceEpg.value = prefs(context).getBoolean(KEY_FOLLOW_SOURCE_EPG, true)
         // v0.188.0 M29：EPG 磁盘缓存目录（私有 filesDir，无需存储权限）。
         EpgFetcher.setCacheDir(File(context.filesDir, "epg_cache").also { it.mkdirs() })
     }
@@ -138,6 +153,30 @@ object LiveStore {
         prefs(context).edit().putString(KEY_GLOBAL_EPG, v).apply()
     }
 
+    fun setFollowSourceEpg(context: Context, follow: Boolean) {
+        _followSourceEpg.value = follow
+        prefs(context).edit().putBoolean(KEY_FOLLOW_SOURCE_EPG, follow).apply()
+    }
+
+    /**
+     * v1.4.12 第 2 步：本源 EPG 地址解析——频道 epg 属性 ＞ 订阅级 EPG ＞
+     * 列表 x-tvg-url；跟随关时返回 ""（只用全局）。订阅按 sourceKey
+     * "m3u:<订阅名>" 找 LiveSource.epg；插件/手动频道无订阅级地址。
+     * 纯函数（不碰 prefs），单测直接验。
+     */
+    internal fun resolveSourceEpgUrl(
+        channel: LiveChannel,
+        sources: List<LiveSource>,
+        followSourceEpg: Boolean,
+    ): String {
+        if (!followSourceEpg) return ""
+        if (channel.epgUrl.isNotBlank()) return channel.epgUrl
+        val sub = sources.firstOrNull { "m3u:${it.name}" == channel.sourceKey }
+            ?.epg.orEmpty()
+        if (sub.isNotBlank()) return sub
+        return channel.playlistEpgUrl
+    }
+
     // ---------------- 订阅管理 ----------------
 
     fun addSource(context: Context, name: String, type: String, url: String): Boolean {
@@ -147,6 +186,16 @@ object LiveStore {
         _sources.value = _sources.value + LiveSource(n, type, u)
         persistSources(context)
         return true
+    }
+
+    /** v1.4.12 第 2 步：改某订阅的节目单地址（按 url 找，找不到不做事）。 */
+    fun setSourceEpg(context: Context, url: String, epg: String) {
+        val v = epg.trim()
+        val list = _sources.value
+        val idx = list.indexOfFirst { it.url == url }
+        if (idx < 0) return
+        _sources.value = list.toMutableList().also { it[idx] = list[idx].copy(epg = v) }
+        persistSources(context)
     }
 
     fun removeSource(context: Context, url: String) {
@@ -640,7 +689,10 @@ object LiveStore {
                             logo = attrs["tvg-logo"].orEmpty(),
                             group = attrs["group-title"].orEmpty().ifBlank { "未分组" },
                             ua = attrs["ua"].orEmpty(),
-                            epgUrl = attrs["epg"].orEmpty().ifBlank { playlistEpg },
+                            // v1.4.12 第 2 步：频道属性与列表地址分开存，
+                            // 订阅级 EPG 插在两者之间（见 resolveSourceEpgUrl）。
+                            epgUrl = attrs["epg"].orEmpty(),
+                            playlistEpgUrl = playlistEpg,
                             sourceKey = sourceKey,
                         ),
                     )

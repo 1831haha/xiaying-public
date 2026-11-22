@@ -131,6 +131,7 @@ import org.json.JSONObject
 import com.movieshell.ui.components.AppButton
 import com.movieshell.ui.components.AppButtonVariant
 import com.movieshell.ui.components.AppCard
+import com.movieshell.ui.components.AppSwitch
 import com.movieshell.ui.components.TechTextField
 import com.movieshell.ui.components.EmptyKind
 import com.movieshell.ui.components.EmptyState
@@ -247,6 +248,9 @@ fun LiveScreen(
     // v0.159.0：按台名记住上次选的源（源1/源2）——中列点台不再永远取同名第一条（源1）
     var liveSourceByName by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val globalEpg by LiveStore.globalEpg.collectAsState()
+    // v1.4.12 第 2 步：跟随电视源的 EPG 开关＋订阅列表（订阅级 EPG 用）。
+    val followSourceEpg by LiveStore.followSourceEpg.collectAsState()
+    val liveSources by LiveStore.sources.collectAsState()
 
     // v0.219.0：切 tab 真离开时停播的开关——照详情页 goingFullscreen 的套路：
     // 跳全屏独立播放页／直播管理页是页内跳转（会话延续），先置 true，
@@ -496,15 +500,27 @@ fun LiveScreen(
     // EPG：当前节目 + 下一档（节目信息卡用）；
     // v1.4.11 第 1 步：本源失效自动回落全局（用户自填，不内置源），仍无则 null；
     // 兜底命中时节目卡打“全局”小标。
+    // v1.4.12 第 2 步：本源地址先按四级解析（频道属性＞订阅＞列表＞全局前三级），
+    // 再进回落；开关/订阅改了要重拉，故都进 effect key。
+    val sourceEpgUrl = remember(selected, liveSources, followSourceEpg) {
+        selected?.let { LiveStore.resolveSourceEpgUrl(it, liveSources, followSourceEpg) }.orEmpty()
+    }
+    // v1.4.12 第 2 步：有节目单的源 key 集合（频道属性或列表地址任一非空即算）。
+    // 审稿 S1：只填订阅级 EPG 的源也要算，否则管理页显示已生效、源行却没“已配”，前后矛盾。
+    val epgSourceKeys = remember(channels, liveSources) {
+        (channels.filter { it.epgUrl.isNotBlank() || it.playlistEpgUrl.isNotBlank() }
+            .map { it.sourceKey }
+            + liveSources.filter { it.epg.isNotBlank() }.map { "m3u:${it.name}" }).toSet()
+    }
     var epg by remember { mutableStateOf<Pair<EpgFetcher.Program?, EpgFetcher.Program?>?>(null) }
     var epgFromGlobal by remember { mutableStateOf(false) }
-    LaunchedEffect(selected, globalEpg) {
+    LaunchedEffect(selected, globalEpg, followSourceEpg, sourceEpgUrl) {
         val ch = selected
         if (ch == null) {
             epg = null
             epgFromGlobal = false
         } else {
-            val result = EpgFetcher.nowAndNextWithFallback(ch.epgUrl, globalEpg, ch.name)
+            val result = EpgFetcher.nowAndNextWithFallback(sourceEpgUrl, globalEpg, ch.name)
             epg = result.programs.takeIf { it.first != null || it.second != null }
             epgFromGlobal = result.layer == EpgFetcher.EpgLayer.GLOBAL
         }
@@ -653,7 +669,7 @@ fun LiveScreen(
                 channel = playing,
                 epg = epg,
                 epgFromGlobal = epgFromGlobal,
-                hasEpgSource = (playing?.epgUrl?.isNotBlank() == true || globalEpg.isNotBlank()),
+                hasEpgSource = (sourceEpgUrl.isNotBlank() || globalEpg.isNotBlank()),
                 isFavorite = channels.firstOrNull { it.id == playing?.id }?.favorite == true,
                 onSearchClick = { showSearch = !showSearch },
                 onFavoriteClick = {
@@ -771,6 +787,10 @@ fun LiveScreen(
             sourceKeys = sourceKeys,
             selectedLiveSource = selectedLiveSource,
             globalEpg = globalEpg,
+            followSourceEpg = followSourceEpg,
+            currentEpgUrl = sourceEpgUrl,
+            hasSelected = selected != null,
+            epgSourceKeys = epgSourceKeys,
             hiddenStreams = hiddenStreams,
             onUnhideStream = { u ->
                 LiveStore.unhideStream(context, u)
@@ -872,6 +892,11 @@ private fun LiveSettingsSheet(
     sourceKeys: List<String>,
     selectedLiveSource: String?,
     globalEpg: String,
+    // v1.4.12 第 2 步：跟随开关状态、当前生效的本源 EPG 地址、有节目单的源 key 集合。
+    followSourceEpg: Boolean,
+    currentEpgUrl: String,
+    hasSelected: Boolean,
+    epgSourceKeys: Set<String> = emptySet(),
     // v1.4.9：已隐藏的流 URL 与逐条恢复回调（恢复后调用方刷新拉回）。
     hiddenStreams: List<String> = emptyList(),
     onUnhideStream: (String) -> Unit = {},
@@ -968,6 +993,16 @@ private fun LiveSettingsSheet(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
+                        // v1.4.12 第 2 步：该源有自带节目单（频道属性或列表地址）时打“已配”，
+                        // 只看有没有、不探活（没探活不能打 ✓）。
+                        if (key in epgSourceKeys) {
+                            Text(
+                                text = "已配",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(4.dp))
+                        }
                         Text(
                             text = if (key == "manual") "手动" else "接口",
                             style = MaterialTheme.typography.bodySmall,
@@ -1016,6 +1051,42 @@ private fun LiveSettingsSheet(
                     }
                 }
             } else {
+                // v1.4.12 第 2 步：跟随开关（默认开）＋当前生效的本源 EPG 地址。
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "跟随电视源的 EPG",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = "开：先用电视源自带的节目单，失效再回落全局；关：只用全局节目单",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    AppSwitch(
+                        checked = followSourceEpg,
+                        onCheckedChange = { LiveStore.setFollowSourceEpg(context, it) },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "当前生效源的 EPG",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    text = when {
+                        !hasSelected -> "未选台"
+                        !followSourceEpg -> "跟随已关，只用全局节目单"
+                        currentEpgUrl.isNotBlank() -> currentEpgUrl
+                        else -> "未配置"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(16.dp))
                 Text(
                     text = "全局节目单（兜底）",
                     style = MaterialTheme.typography.bodyLarge,
@@ -1409,11 +1480,17 @@ private fun ChannelDetailSheet(
     var epgFromGlobal by remember(channel.id) { mutableStateOf(false) }
     var epgLoading by remember(channel.id) { mutableStateOf(false) }
     val globalEpgDetail by LiveStore.globalEpg.collectAsState()
+    val followSourceEpgDetail by LiveStore.followSourceEpg.collectAsState()
+    val liveSourcesDetail by LiveStore.sources.collectAsState()
+    // v1.4.12 第 2 步：详情弹层也走四级解析后的本源地址。
+    val sourceEpgUrlDetail = remember(channel.id, liveSourcesDetail, followSourceEpgDetail) {
+        LiveStore.resolveSourceEpgUrl(channel, liveSourcesDetail, followSourceEpgDetail)
+    }
 
-    LaunchedEffect(channel.id, globalEpgDetail) {
-        if (channel.epgUrl.isNotBlank() || globalEpgDetail.isNotBlank()) {
+    LaunchedEffect(channel.id, globalEpgDetail, followSourceEpgDetail, sourceEpgUrlDetail) {
+        if (sourceEpgUrlDetail.isNotBlank() || globalEpgDetail.isNotBlank()) {
             epgLoading = true
-            val result = EpgFetcher.nowAndNextWithFallback(channel.epgUrl, globalEpgDetail, channel.name)
+            val result = EpgFetcher.nowAndNextWithFallback(sourceEpgUrlDetail, globalEpgDetail, channel.name)
             epg = result.programs.takeIf { it.first != null || it.second != null }
             epgFromGlobal = result.layer == EpgFetcher.EpgLayer.GLOBAL
             epgLoading = false
@@ -1489,7 +1566,7 @@ private fun ChannelDetailSheet(
             }
             Spacer(Modifier.height(12.dp))
             // EPG：当前 + 后续（尽力展示）
-            if (channel.epgUrl.isNotBlank() || globalEpgDetail.isNotBlank()) {
+            if (sourceEpgUrlDetail.isNotBlank() || globalEpgDetail.isNotBlank()) {
                 Text(
                     if (epgFromGlobal) "节目单 · 全局" else "节目单",
                     style = MaterialTheme.typography.bodyLarge,
@@ -1816,35 +1893,66 @@ fun LiveManageScreen(onBack: () -> Unit) {
             }
             // v0.133.0：订阅源写侧按 url 查重，但持久化文件读侧无去重，渲染前兜底防同 url 撞 key
             items(sources.distinctBy { it.url }, key = { it.url }) { s ->
+                // v1.4.12 第 2 步：订阅级节目单地址输入框（点保存即生效，下次切台用它）。
+                var epgText by remember(s.url, s.epg) { mutableStateOf(s.epg) }
                 AppCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                    Column {
+                        Row(
+                            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    s.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    if (s.type == LiveSource.LOCAL_FILE) "本地文件" else s.url,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            IconButton(onClick = {
+                                LiveStore.removeSource(context, s.url)
+                                // v1.4.2：走 appScope——删源后切走，刷新也要跑完
+                                //（doRefresh 是 LiveScreen 的局部函数，这里直接走 appScope）。
+                                SubSiteStore.appScope.launch { LiveStore.refresh(context) }
+                            }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "删除订阅")
+                            }
+                        }
+                        Column(modifier = Modifier.padding(12.dp)) {
                             Text(
-                                s.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                if (s.type == LiveSource.LOCAL_FILE) "本地文件" else s.url,
+                                text = "节目单地址",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                             )
-                        }
-                        IconButton(onClick = {
-                            LiveStore.removeSource(context, s.url)
-                            // v1.4.2：走 appScope——删源后切走，刷新也要跑完
-                            //（doRefresh 是 LiveScreen 的局部函数，这里直接走 appScope）。
-                            SubSiteStore.appScope.launch { LiveStore.refresh(context) }
-                        }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "删除订阅")
+                            Spacer(Modifier.height(4.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TechTextField(
+                                    value = epgText,
+                                    onValueChange = { epgText = it },
+                                    modifier = Modifier.weight(1f),
+                                    placeholder = "https://…/xxx.xml（空则用列表自带的）",
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                TextButton(onClick = {
+                                    LiveStore.setSourceEpg(context, s.url, epgText)
+                                    AppToast.show(
+                                        context,
+                                        if (epgText.isBlank()) "已清除该订阅的节目单地址" else "已保存该订阅的节目单地址",
+                                        long = false,
+                                    )
+                                }) {
+                                    Text("保存")
+                                }
+                            }
                         }
                     }
                 }

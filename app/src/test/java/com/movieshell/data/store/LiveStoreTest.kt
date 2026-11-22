@@ -1,5 +1,7 @@
 package com.movieshell.data.store
 
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,5 +65,126 @@ class LiveStoreTest {
         assertEquals("", LiveStore.hostOfUrl(""))
         assertEquals("", LiveStore.hostOfUrl("not a url"))
         assertEquals("", LiveStore.hostOfUrl("just-a-path/1695.m3u8"))
+    }
+
+    // v1.4.12 第 2 步：本源 EPG 四级解析（频道属性＞订阅＞列表＞全局前三级）。
+
+    private val subA = LiveSource(
+        name = "央视",
+        url = "https://example.com/a.m3u",
+        epg = "https://example.com/sub.xml",
+    )
+    private val subB = LiveSource(name = "卫视", url = "https://example.com/b.m3u")
+
+    private fun epgChannel(
+        epg: String = "",
+        playlist: String = "",
+        sourceKey: String = "m3u:央视",
+    ) = LiveChannel(
+        id = "x",
+        name = "CCTV-1",
+        url = "http://x/1",
+        epgUrl = epg,
+        playlistEpgUrl = playlist,
+        sourceKey = sourceKey,
+    )
+
+    @Test
+    fun `resolve channel epg attr wins over subscription and playlist`() {
+        val c = epgChannel(
+            epg = "https://example.com/ch.xml",
+            playlist = "https://example.com/list.xml",
+        )
+        assertEquals("https://example.com/ch.xml", LiveStore.resolveSourceEpgUrl(c, listOf(subA), true))
+    }
+
+    @Test
+    fun `resolve subscription wins over playlist when channel attr blank`() {
+        val c = epgChannel(playlist = "https://example.com/list.xml")
+        assertEquals("https://example.com/sub.xml", LiveStore.resolveSourceEpgUrl(c, listOf(subA), true))
+    }
+
+    @Test
+    fun `resolve playlist used when attr and subscription blank`() {
+        val c = epgChannel(playlist = "https://example.com/list.xml")
+        assertEquals("https://example.com/list.xml", LiveStore.resolveSourceEpgUrl(c, listOf(subB), true))
+    }
+
+    @Test
+    fun `resolve blank when nothing configured`() {
+        // 审稿 M1：原来配 listOf(subA) 是错的——epgChannel() 默认 sourceKey
+        // "m3u:央视" 与 subA（名“央视”、epg 非空）恰好匹配，解析会返回
+        // 订阅地址而非 ""；用 subB（无 epg、名也对不上）才真是“全空”。
+        assertEquals("", LiveStore.resolveSourceEpgUrl(epgChannel(), listOf(subB), true))
+    }
+
+    @Test
+    fun `resolve empty when follow off even with channel epg`() {
+        val c = epgChannel(
+            epg = "https://example.com/ch.xml",
+            playlist = "https://example.com/list.xml",
+        )
+        assertEquals("", LiveStore.resolveSourceEpgUrl(c, listOf(subA), false))
+    }
+
+    @Test
+    fun `resolve plugin and manual channels skip subscription level`() {
+        val plugin = epgChannel(
+            playlist = "https://example.com/list.xml",
+            sourceKey = "plugin:foo.json",
+        )
+        assertEquals("https://example.com/list.xml", LiveStore.resolveSourceEpgUrl(plugin, listOf(subA), true))
+        val manual = epgChannel(sourceKey = "manual")
+        assertEquals("", LiveStore.resolveSourceEpgUrl(manual, listOf(subA), true))
+    }
+
+    @Test
+    fun `parseM3u splits channel epg attr and playlist x-tvg-url`() {
+        val text = """
+            #EXTM3U x-tvg-url="https://example.com/list.xml"
+            #EXTINF:-1 tvg-logo="x" epg="https://example.com/ch.xml",CCTV-1
+            http://x/1.m3u8
+            #EXTINF:-1,CCTV-2
+            http://x/2.m3u8
+        """.trimIndent()
+        val list = LiveStore.parseM3u(text, "m3u:央视")
+        assertEquals(2, list.size)
+        assertEquals("https://example.com/ch.xml", list[0].epgUrl)
+        assertEquals("https://example.com/list.xml", list[0].playlistEpgUrl)
+        assertEquals("", list[1].epgUrl)
+        assertEquals("https://example.com/list.xml", list[1].playlistEpgUrl)
+    }
+
+    @Test
+    fun `parseM3u without playlist header leaves playlist blank`() {
+        val text = """
+            #EXTINF:-1,CCTV-1
+            http://x/1.m3u8
+        """.trimIndent()
+        val list = LiveStore.parseM3u(text, "m3u:央视")
+        assertEquals(1, list.size)
+        assertEquals("", list[0].epgUrl)
+        assertEquals("", list[0].playlistEpgUrl)
+    }
+
+    @Test
+    fun `old LiveSource json without epg field decodes as blank`() {
+        val list = Json { ignoreUnknownKeys = true }.decodeFromString(
+            ListSerializer(LiveSource.serializer()),
+            """[{"name":"央视","type":"M3U_URL","url":"https://example.com/a.m3u"}]""",
+        )
+        assertEquals(1, list.size)
+        assertEquals("", list[0].epg)
+    }
+
+    @Test
+    fun `old LiveChannel json without playlistEpgUrl decodes as blank`() {
+        val list = Json { ignoreUnknownKeys = true }.decodeFromString(
+            ListSerializer(LiveChannel.serializer()),
+            """[{"id":"m3u:a|http://x/1","name":"CCTV-1","url":"http://x/1","epgUrl":"https://example.com/ch.xml"}]""",
+        )
+        assertEquals(1, list.size)
+        assertEquals("https://example.com/ch.xml", list[0].epgUrl)
+        assertEquals("", list[0].playlistEpgUrl)
     }
 }
