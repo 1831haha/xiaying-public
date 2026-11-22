@@ -12,8 +12,10 @@ import androidx.compose.ui.graphics.Color
  * 用它做状态栏/导航栏底色，离页清掉；图标深浅仍走 MainActivity 现成的
  * luminance 判断。
  *
- * 整体色取法：播放页氛围是模糊封面 + 黑渐变（顶部黑 38%），顶边颜色约等于
- * 封面平均色 × 0.62；无封面时用氛围底色。换歌 → 封面变 → 系统栏跟着变。
+ * v1.4.15：整页一个色（C 改良版）——模糊封面铺满 + 整页均匀黑遮罩，
+ * 不再是顶 38% 底 88% 的黑渐变。整体色取法：有封面时封面平均色盖
+ * 同一层均匀遮罩，无封面时品牌渐变首色同样叠加。旧的 atmosphereBarColor
+ * （平均色 × 0.62）随黑渐变一起废止。
  */
 object PlayerSystemBars {
     /** 当前播放页整体色；null = 不在播放页内。 */
@@ -31,27 +33,24 @@ object PlayerSystemBars {
     /** 播放页氛围底色（PlayerAtmosphere 的底色，无封面时用它）。 */
     val ATMOSPHERE_BASE = Color(0xFF07070D)
 
-    /** 封面平均色 → 系统栏色：压暗到贴合页面顶边（模糊封面压 38% 黑）。 */
-    fun atmosphereBarColor(artAverage: Color?): Color {
+    /** v1.4.15：均匀遮罩透明度——普通 0.60，沉浸 0.55（与 PlayerAtmosphere 同值）。 */
+    fun uniformScrimAlpha(immersive: Boolean): Float = if (immersive) 0.55f else 0.60f
+
+    /** 封面平均色 → 系统栏色：盖一层与页面相同的均匀黑遮罩，与页面顶边同色。 */
+    fun uniformBarColor(artAverage: Color?, immersive: Boolean): Color {
         val base = artAverage ?: return ATMOSPHERE_BASE
-        return Color(
-            red = (base.red * 0.62f).coerceIn(0f, 1f),
-            green = (base.green * 0.62f).coerceIn(0f, 1f),
-            blue = (base.blue * 0.62f).coerceIn(0f, 1f),
-            alpha = 1f,
-        )
+        return compositeOver(Color.Black.copy(alpha = uniformScrimAlpha(immersive)), base)
     }
 
     /**
-     * v1.3.3：无封面时系统栏色——页面顶边实际是品牌渐变首色（0.32 透明度）
-     * 铺在氛围底色上，再压一层黑渐变（顶部 0.38，沉浸 0.18）；按同样的
-     * 两层叠加算出来，与页面顶边同色。直接回到底色会比页面顶边黑一截，
-     * 看着就是“没跟上”。
+     * v1.4.15：无封面时系统栏色——页面顶边是品牌渐变首色（0.32 透明度）
+     * 铺在氛围底色上，再压一层与页面相同的均匀黑遮罩。直接回到底色会
+     * 比页面顶边黑一截，看着就是“没跟上”。
      */
     fun noArtBarColor(brandTop: Color?, immersive: Boolean): Color {
         val top = brandTop ?: return ATMOSPHERE_BASE
         val overBase = compositeOver(top.copy(alpha = 0.32f), ATMOSPHERE_BASE)
-        return compositeOver(Color.Black.copy(alpha = if (immersive) 0.18f else 0.38f), overBase)
+        return compositeOver(Color.Black.copy(alpha = uniformScrimAlpha(immersive)), overBase)
     }
 
     /** src（带透明度）盖在不透明的 dst 上。 */

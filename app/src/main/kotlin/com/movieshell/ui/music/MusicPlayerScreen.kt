@@ -1,6 +1,7 @@
 package com.movieshell.ui.music
 
 import android.animation.ValueAnimator
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import com.movieshell.ui.components.AppToast
 import androidx.compose.animation.core.LinearEasing
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -189,14 +189,17 @@ fun MusicPlayerScreen(
     val artPainter = rememberAsyncImagePainter(model = artRequest)
     val artBitmap = (artPainter.state as? AsyncImagePainter.State.Success)
         ?.result?.drawable?.toBitmap()
-    // 无封面时页面顶边是品牌渐变首色铺底 + 黑渐变，栏色按同样叠加算，
-    // 不能回到底色（底色比页面顶边黑一截，看着就是“没跟上”）。
+    // v1.4.15：整页一个色——系统栏盖与页面相同的均匀黑遮罩，不再是
+    // 平均色 × 0.62（那是顶 38% 黑渐变的旧算法）；布局切换也重算栏色。
     val brandTop = LocalBrandGradient.current.firstOrNull()
     val immersiveLayout = playerLayout == MusicPlayerLayout.IMMERSIVE
-    LaunchedEffect(artBitmap, shownArt) {
+    LaunchedEffect(artBitmap, shownArt, immersiveLayout) {
         val color = when {
             artBitmap != null -> withContext(Dispatchers.Default) {
-                PlayerSystemBars.atmosphereBarColor(PlayerSystemBars.averageColor(artBitmap))
+                PlayerSystemBars.uniformBarColor(
+                    PlayerSystemBars.averageColor(artBitmap),
+                    immersiveLayout,
+                )
             }
             shownArt.isBlank() -> PlayerSystemBars.noArtBarColor(brandTop, immersiveLayout)
             else -> PlayerSystemBars.ATMOSPHERE_BASE
@@ -294,12 +297,13 @@ fun MusicPlayerScreen(
         }
     }
 
+    // v1.4.15：调色板打开时返回键先关面板，不直接退页。
+    BackHandler(enabled = showLyricColors) { showLyricColors = false }
+
     Box(modifier = Modifier.fillMaxSize()) {
         PlayerAtmosphere(
             artUrl = shownArt,
-            reducedMotion = reducedMotion,
             immersive = playerLayout == MusicPlayerLayout.IMMERSIVE,
-            playing = playState.playing,
         )
         Scaffold(
             containerColor = Color.Transparent,
@@ -447,7 +451,7 @@ fun MusicPlayerScreen(
                                     )
                                 }
                                 else -> {
-                                    // IMMERSIVE：满幅圆角方封面（极光在氛围层）
+                                    // IMMERSIVE：满幅圆角方封面
                                     SquaredCoverArt(
                                         artUrl = shownArt,
                                         coverScale = coverScale,
@@ -521,6 +525,19 @@ fun MusicPlayerScreen(
                                         )
                                     }
                                 }
+                            }
+                            // v1.4.15：调色板点空白收回——面板打开时在歌词区铺一层
+                            // 透明遮罩，点遮罩即关面板；面板 zIndex 1f 在遮罩之上，
+                            // 点面板不透传；字号点完不关（可连试），色点点完即关。
+                            if (showLyricColors) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clickable(
+                                            indication = null,
+                                            interactionSource = remember { MutableInteractionSource() },
+                                        ) { showLyricColors = false },
+                                )
                             }
                             // 色板入口：子级 clickable 自行消费点击，不触发外层封面/歌词切换
                             Column(
@@ -1051,14 +1068,17 @@ private fun PlayingBars(playing: Boolean, reducedMotion: Boolean) {
     }
 }
 
+/**
+ * v1.4.15：整页一个色（C 改良版）——模糊封面铺满 + 整页均匀黑遮罩
+ * （普通 0.60，沉浸 0.55），去掉顶 38% 底 88% 的黑渐变；两团漂移
+ * 光斑与沉浸炫彩极光一并去掉，光斑/极光是在造第二个色。
+ * 旧参数 reducedMotion/playing 随光斑/极光一起去掉（氛围层已无动画）。
+ */
 @Composable
 private fun PlayerAtmosphere(
     artUrl: String,
-    reducedMotion: Boolean,
-    // v0.294.12：沉浸布局放大模糊封面、蒙版更淡，前景内容叠在氛围上
+    // v0.294.12：沉浸布局放大模糊封面、遮罩更淡，前景内容叠在氛围上
     immersive: Boolean = false,
-    // v0.294.14：播放时加强流动炫彩极光
-    playing: Boolean = false,
 ) {
     Box(
         modifier = Modifier
@@ -1090,90 +1110,13 @@ private fun PlayerAtmosphere(
                     ),
             )
         }
-        // v0.248.0：流动光斑（装饰层）——两团品牌色径向光低速漂移＋透明度呼吸，
-        // 只动绘制层位移，不做模糊、不改布局；减动效时整层不画。
-        if (!reducedMotion) {
-            val brand = LocalBrandGradient.current
-            val drift1 = remember { Animatable(0f) }
-            val drift2 = remember { Animatable(0f) }
-            LaunchedEffect(Unit) {
-                launch {
-                    while (true) {
-                        drift1.animateTo(1f, tween(14000, easing = LinearEasing))
-                        drift1.animateTo(0f, tween(14000, easing = LinearEasing))
-                    }
-                }
-                launch {
-                    while (true) {
-                        drift2.animateTo(1f, tween(19000, easing = LinearEasing))
-                        drift2.animateTo(0f, tween(19000, easing = LinearEasing))
-                    }
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .size(300.dp)
-                    .offset(30.dp, 90.dp)
-                    .graphicsLayer {
-                        translationX = drift1.value * 50f
-                        translationY = drift1.value * 34f
-                    }
-                    .background(
-                        Brush.radialGradient(
-                            listOf(
-                                (brand.firstOrNull() ?: Color.Cyan).copy(alpha = 0.22f),
-                                Color.Transparent,
-                            ),
-                        ),
-                        CircleShape,
-                    ),
-            )
-            Box(
-                modifier = Modifier
-                    .size(340.dp)
-                    .align(Alignment.BottomEnd)
-                    .offset((-20).dp, (-140).dp)
-                    .graphicsLayer {
-                        translationX = -drift2.value * 46f
-                        translationY = -drift2.value * 30f
-                    }
-                    .background(
-                        Brush.radialGradient(
-                            listOf(
-                                (brand.lastOrNull() ?: Color.Magenta).copy(alpha = 0.20f),
-                                Color.Transparent,
-                            ),
-                        ),
-                        CircleShape,
-                    ),
-            )
-        }
-        // v0.294.14：沉浸布局叠加流动炫彩极光（非静态模糊）
-        if (immersive) {
-            ImmersiveAuroraOverlay(
-                playing = playing,
-                reducedMotion = reducedMotion,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        // v1.4.15：均匀黑遮罩——整页同一透明度，上下不再拉开。
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    Brush.verticalGradient(
-                        if (immersive) {
-                            listOf(
-                                Color.Black.copy(alpha = 0.18f),
-                                Color.Black.copy(alpha = 0.42f),
-                                Color.Black.copy(alpha = 0.72f),
-                            )
-                        } else {
-                            listOf(
-                                Color.Black.copy(alpha = 0.38f),
-                                Color.Black.copy(alpha = 0.68f),
-                                Color.Black.copy(alpha = 0.88f),
-                            )
-                        },
+                    Color.Black.copy(
+                        alpha = PlayerSystemBars.uniformScrimAlpha(immersive),
                     ),
                 ),
         )

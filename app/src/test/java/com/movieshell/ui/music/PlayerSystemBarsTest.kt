@@ -8,22 +8,33 @@ import org.junit.Test
 class PlayerSystemBarsTest {
 
     @Test fun noArtFallsBackToAtmosphereBase() {
-        assertEquals(PlayerSystemBars.ATMOSPHERE_BASE, PlayerSystemBars.atmosphereBarColor(null))
+        assertEquals(PlayerSystemBars.ATMOSPHERE_BASE, PlayerSystemBars.uniformBarColor(null, false))
         assertEquals(Color(0xFF07070D), PlayerSystemBars.ATMOSPHERE_BASE)
     }
 
-    @Test fun artAverageIsDarkenedToMatchPageTopEdge() {
-        // 页面顶部是模糊封面压 38% 黑渐变，系统栏色 = 平均色 × 0.62。
+    @Test fun uniformScrimAlphaValues() {
+        assertEquals(0.60f, PlayerSystemBars.uniformScrimAlpha(false), 0.001f)
+        assertEquals(0.55f, PlayerSystemBars.uniformScrimAlpha(true), 0.001f)
+    }
+
+    @Test fun artAverageIsDarkenedByUniformScrim() {
+        // v1.4.15：整页一个色——系统栏色 = 平均色盖均匀黑遮罩（普通 0.60，沉浸 0.55），
+        // 不再是旧的平均色 × 0.62（顶 38% 黑渐变的算法）。
         // Compose Color 按 8 位通道存储（单步 1/255≈0.0039），允差取 0.005。
-        val white = PlayerSystemBars.atmosphereBarColor(Color(0xFFFFFFFF))
-        assertEquals(0.62f, white.red, 0.005f)
-        assertEquals(0.62f, white.green, 0.005f)
-        assertEquals(0.62f, white.blue, 0.005f)
-        val blue = PlayerSystemBars.atmosphereBarColor(Color(0xFF336699))
-        assertEquals(0x33 / 255f * 0.62f, blue.red, 0.005f)
-        assertEquals(0x66 / 255f * 0.62f, blue.green, 0.005f)
-        assertEquals(0x99 / 255f * 0.62f, blue.blue, 0.005f)
+        val white = PlayerSystemBars.uniformBarColor(Color(0xFFFFFFFF), immersive = false)
+        assertEquals(0.40f, white.red, 0.005f)
+        assertEquals(0.40f, white.green, 0.005f)
+        assertEquals(0.40f, white.blue, 0.005f)
+        val blue = PlayerSystemBars.uniformBarColor(Color(0xFF336699), immersive = false)
+        assertEquals(0x33 / 255f * 0.40f, blue.red, 0.005f)
+        assertEquals(0x66 / 255f * 0.40f, blue.green, 0.005f)
+        assertEquals(0x99 / 255f * 0.40f, blue.blue, 0.005f)
         assertEquals(1f, blue.alpha, 0.005f)
+        // 沉浸遮罩 0.55，颜色更亮。
+        val whiteImmersive = PlayerSystemBars.uniformBarColor(Color(0xFFFFFFFF), immersive = true)
+        assertEquals(0.45f, whiteImmersive.red, 0.005f)
+        assertEquals(0.45f, whiteImmersive.green, 0.005f)
+        assertEquals(0.45f, whiteImmersive.blue, 0.005f)
     }
 
     @Test fun averageColorOfPixels() {
@@ -38,16 +49,17 @@ class PlayerSystemBarsTest {
     }
 
     @Test fun noArtBarColorMatchesAtmosphereTopEdge() {
-        // 品牌首色青 0xFF4DD0E1：0.32 铺底 + 顶部黑 0.38，两层叠加后约 (0.071, 0.173, 0.197)。
+        // v1.4.15：品牌首色青 0xFF4DD0E1：0.32 铺底 + 均匀黑遮罩（普通 0.60，沉浸 0.55），
+        // 两层叠加后普通约 (0.046, 0.112, 0.127)，沉浸约 (0.052, 0.126, 0.143)。
         val normal = PlayerSystemBars.noArtBarColor(Color(0xFF4DD0E1), immersive = false)
-        assertEquals(0.071f, normal.red, 0.005f)
-        assertEquals(0.173f, normal.green, 0.005f)
-        assertEquals(0.197f, normal.blue, 0.005f)
-        // 沉浸黑渐变顶部只有 0.18，颜色更亮。
+        assertEquals(0.046f, normal.red, 0.005f)
+        assertEquals(0.112f, normal.green, 0.005f)
+        assertEquals(0.127f, normal.blue, 0.005f)
+        // 沉浸遮罩 0.55，颜色更亮。
         val immersive = PlayerSystemBars.noArtBarColor(Color(0xFF4DD0E1), immersive = true)
-        assertEquals(0.095f, immersive.red, 0.005f)
-        assertEquals(0.229f, immersive.green, 0.005f)
-        assertEquals(0.260f, immersive.blue, 0.005f)
+        assertEquals(0.052f, immersive.red, 0.005f)
+        assertEquals(0.126f, immersive.green, 0.005f)
+        assertEquals(0.143f, immersive.blue, 0.005f)
         assertEquals(PlayerSystemBars.ATMOSPHERE_BASE, PlayerSystemBars.noArtBarColor(null, false))
     }
 
