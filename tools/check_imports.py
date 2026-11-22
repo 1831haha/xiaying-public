@@ -128,13 +128,22 @@ def check_file(path: Path, import_map: dict) -> list:
     # 小写符号定向检查（只保留被真实构建失败证明过的项）：
     # - items/itemsIndexed：v0.82.0 MusicScreen 实锤漏 import 导致构建挂
     # - collectAsState：同类高频，一并盯
+    # - remember/mutableStateOf/rememberSaveable/derivedStateOf/rememberCoroutineScope：
+    #   1.4.14 云构建 #749 实锤——LiveChannelColumn.kt 只用了一次 remember(channel.logo)
+    #   就挂了构建，脚本全绿。根因：大写符号提取只认 [A-Z] 开头，小写函数只能靠这张表。
     # 注意：grid scope 里的 item(span=) 经 v0.81.0/v0.82.0 两次云构建证明无需显式 import，不查
+    # 匹配 ( 或 {：remember { } 这种尾随 lambda 写法也要抓（只写 \( 会漏）。
     for fname, full_imp in {
         "items": "androidx.compose.foundation.lazy.items",
         "itemsIndexed": "androidx.compose.foundation.lazy.itemsIndexed",
         "collectAsState": "androidx.compose.runtime.collectAsState",
+        "remember": "androidx.compose.runtime.remember",
+        "mutableStateOf": "androidx.compose.runtime.mutableStateOf",
+        "rememberSaveable": "androidx.compose.runtime.saveable.rememberSaveable",
+        "derivedStateOf": "androidx.compose.runtime.derivedStateOf",
+        "rememberCoroutineScope": "androidx.compose.runtime.rememberCoroutineScope",
     }.items():
-        if re.search(r"(?<![.\w])" + fname + r"\s*\(", code) and fname not in defined \
+        if re.search(r"(?<![.\w])" + fname + r"\s*[\(\{]", code) and fname not in defined \
                 and full_imp.split(".")[-1] not in imported:
             # 排除 receiver 链式调用：前面是 ) 或 } 或引号结尾不算（简化：只看 import 缺失且非局部定义）
             errors.append(
