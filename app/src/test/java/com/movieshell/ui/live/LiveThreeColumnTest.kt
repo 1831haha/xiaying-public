@@ -75,9 +75,9 @@ class LiveThreeColumnTest {
             listOf(hd, eu, c4, plus, c5),
             distinctChannelsGlobally(rows, mapOf("CCTV1" to "b|gone")),
         )
-        // 顺序保持 key 首次出现顺序
+        // 顺序保持 key 首次出现顺序；每组代表行取组内第一条
         assertEquals(
-            listOf(c5, hd),
+            listOf(c5, plain),
             distinctChannelsGlobally(listOf(c5, plain, hd), emptyMap()),
         )
     }
