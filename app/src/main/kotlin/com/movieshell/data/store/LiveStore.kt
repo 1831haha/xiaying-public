@@ -177,6 +177,40 @@ object LiveStore {
         return channel.playlistEpgUrl
     }
 
+    /** v1.4.13 第 3 步：套用候选——其它源下发的 {name}/{date} 模板。 */
+    data class EpgTemplate(val template: String, val fromLabel: String)
+
+    /**
+     * 收集可套用的模板：全局地址、订阅级地址、频道 epg 属性、列表 x-tvg-url，
+     * 按模板去重（先出现者赢）、排除本行自己的当前值、最多 3 条。
+     * 纯函数，单测直接验。
+     */
+    internal fun collectEpgTemplates(
+        sources: List<LiveSource>,
+        channels: List<LiveChannel>,
+        globalEpg: String,
+        excludeUrl: String,
+    ): List<EpgTemplate> {
+        val found = linkedMapOf<String, String>()
+        fun add(template: String, label: String) {
+            if (!EpgFetcher.isTemplate(template)) return
+            if (template == excludeUrl) return
+            found.putIfAbsent(template, label)
+        }
+        if (globalEpg.isNotBlank()) add(globalEpg, "全局节目单")
+        for (s in sources) {
+            if (s.epg.isNotBlank()) add(s.epg, "订阅「${s.name}」")
+        }
+        for (c in channels) {
+            if (c.epgUrl.isNotBlank()) add(c.epgUrl, "频道「${c.name}」")
+            if (c.playlistEpgUrl.isNotBlank()) {
+                val owner = c.sourceKey.removePrefix("m3u:").ifBlank { c.sourceKey }
+                add(c.playlistEpgUrl, "列表「$owner」")
+            }
+        }
+        return found.entries.take(3).map { EpgTemplate(it.key, it.value) }
+    }
+
     // ---------------- 订阅管理 ----------------
 
     fun addSource(context: Context, name: String, type: String, url: String): Boolean {

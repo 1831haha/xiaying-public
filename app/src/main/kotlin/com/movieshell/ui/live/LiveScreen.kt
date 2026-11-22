@@ -1681,6 +1681,9 @@ fun LiveManageScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val sources by LiveStore.sources.collectAsState()
+    // v1.4.13 第 3 步：套用候选要看频道 epg 属性与全局地址。
+    val channels by LiveStore.channels.collectAsState()
+    val globalEpg by LiveStore.globalEpg.collectAsState()
     var showAddSub by remember { mutableStateOf(false) }
     var showAddChannel by remember { mutableStateOf(false) }
     // v0.158.0：全局节目单兜底地址（用户自填，不内置源）
@@ -1951,6 +1954,36 @@ fun LiveManageScreen(onBack: () -> Unit) {
                                     )
                                 }) {
                                     Text("保存")
+                                }
+                            }
+                        }
+                        // v1.4.13 第 3 步：套用其它源下发的模板（点一下写进本订阅的
+                        // EPG 字段，不搞临时覆盖；填完跟“保存”一样，下次切台用它）。
+                        val applyTemplates = remember(sources, channels, globalEpg, s.epg) {
+                            LiveStore.collectEpgTemplates(sources, channels, globalEpg, s.epg)
+                        }
+                        if (applyTemplates.isNotEmpty()) {
+                            Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+                                Text(
+                                    text = "套用其他源的模板",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                applyTemplates.forEach { t ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "来自${t.fromLabel}：${t.template}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        TextButton(onClick = {
+                                            LiveStore.setSourceEpg(context, s.url, t.template)
+                                            AppToast.show(context, "已套用「${t.fromLabel}」的模板", long = false)
+                                        }) { Text("套用") }
+                                    }
                                 }
                             }
                         }

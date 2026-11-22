@@ -262,4 +262,69 @@ class EpgFetcherTest {
         assertEquals(EpgFetcher.EpgLayer.CHANNEL, result.layer)
         assertEquals(listOf(channelUrl), calls)
     }
+
+    // v1.4.13 第 3 步：逐频道模板 {name}/{date}。
+
+    @Test
+    fun expandTemplateNoPlaceholderReturnsSame() {
+        val url = "https://a.example.com/epg.xml"
+        assertEquals(url, EpgFetcher.expandTemplate(url, "CCTV-1"))
+        assertFalse(EpgFetcher.isTemplate(url))
+    }
+
+    @Test
+    fun expandTemplateEncodesChannelName() {
+        val out = EpgFetcher.expandTemplate("https://x/epg?ch={name}", "湖南卫视")
+        assertEquals("https://x/epg?ch=%E6%B9%96%E5%8D%97%E5%8D%AB%E8%A7%86", out)
+        assertTrue(EpgFetcher.isTemplate("https://x/epg?ch={name}"))
+    }
+
+    @Test
+    fun expandTemplateSpaceBecomesPercent20() {
+        // 审稿 S1：台名带空格时，路径位与 query 位都得是 %20，不能是 +。
+        val out = EpgFetcher.expandTemplate("https://x/{name}.xml?ch={name}", "CCTV-1 综合")
+        assertEquals("https://x/CCTV-1%20%E7%BB%BC%E5%90%88.xml?ch=CCTV-1%20%E7%BB%BC%E5%90%88", out)
+    }
+
+    @Test
+    fun expandTemplateDateIsLocalDay() {
+        // 固定一个本地时刻：2026-11-22 08:00（设备时区），{date} 必须是当天。
+        val ms = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply {
+            timeZone = TimeZone.getDefault()
+        }.parse("2026-11-22 08:00")!!.time
+        val out = EpgFetcher.expandTemplate("https://x/epg/{date}/{name}.xml", "CCTV-1", ms)
+        assertEquals("https://x/epg/2026-11-22/CCTV-1.xml", out)
+    }
+
+    @Test
+    fun expandTemplateIsIdempotent() {
+        val once = EpgFetcher.expandTemplate("https://x/{name}/{date}", "CCTV-1", 1_000_000L)
+        assertEquals(once, EpgFetcher.expandTemplate(once, "CCTV-1", 1_000_000L))
+    }
+
+    @Test
+    fun fallbackExpandsTemplateBeforeFetch() = runBlocking {
+        val calls = mutableListOf<String>()
+        val tpl = "https://x/epg?ch={name}&d={date}"
+        val result = EpgFetcher.nowAndNextWithFallback(tpl, globalUrl, "湖南卫视") { url, _ ->
+            calls += url
+            nowProgram to nextProgram
+        }
+        assertEquals(EpgFetcher.EpgLayer.CHANNEL, result.layer)
+        assertEquals(1, calls.size)
+        assertTrue(calls[0].startsWith("https://x/epg?ch=%E6%B9%96%E5%8D%97%E5%8D%AB%E8%A7%86&d="))
+        assertFalse(calls[0].contains("{name}") || calls[0].contains("{date}"))
+    }
+
+    @Test
+    fun fallbackSameTemplateFetchedOnce() = runBlocking {
+        val calls = mutableListOf<String>()
+        val tpl = "https://x/epg?ch={name}&d={date}"
+        val result = EpgFetcher.nowAndNextWithFallback(tpl, tpl, "CCTV-1") { url, _ ->
+            calls += url
+            nowProgram to nextProgram
+        }
+        assertEquals(EpgFetcher.EpgLayer.CHANNEL, result.layer)
+        assertEquals(1, calls.size)
+    }
 }

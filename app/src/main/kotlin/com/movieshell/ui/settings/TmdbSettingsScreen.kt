@@ -144,7 +144,12 @@ fun TmdbSettingsScreen(
             ) {
                 item {
                     SettingsGroup(title = "API Key") {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // v1.4.13：卡片内边距为 0，提示文案须自带 16dp 横向内缩，
+                        // 与输入框内文字对齐，贴卡片边会被圆角裁掉（TMDB 截断实证）。
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
                             TechTextField(
                                 value = keyText,
                                 onValueChange = { keyText = it },
@@ -166,8 +171,14 @@ fun TmdbSettingsScreen(
                                 text = if (keyText.isBlank()) "未填写 · 海报墙暂不可用" else "已填写 · 海报墙匹配用",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
                             )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                // v1.4.13 审稿 S3：按钮行与上面 Text 行同款 16dp 内缩，
+                                // 不然两颗按钮贴卡片边、圆角会裁。
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            ) {
                                 Button(
                                     onClick = { testConnection() },
                                     enabled = !testing,
@@ -184,19 +195,30 @@ fun TmdbSettingsScreen(
                                     text = result,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = if (testOk) cs.primary else cs.error,
+                                    modifier = Modifier.padding(horizontal = 16.dp),
                                 )
                             }
                             Text(
-                                text = "测试用当前框里的值，不用先保存；没填 Key 或清空后，海报墙不联网，只显示占位。",
+                                text = "测试用当前框里的值，不用先保存。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                            Text(
+                                text = "没填 Key 或清空后，海报墙不联网，只显示占位。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
                             )
                         }
                     }
                 }
                 item {
                     SettingsGroup(title = "地址") {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
                             TechTextField(
                                 value = searchBaseText,
                                 onValueChange = { searchBaseText = it },
@@ -206,9 +228,16 @@ fun TmdbSettingsScreen(
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             )
                             Text(
-                                text = "留空恢复默认：${TmdbClient.DEFAULT_SEARCH_BASE}",
+                                text = "留空恢复默认：",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                            Text(
+                                text = TmdbClient.DEFAULT_SEARCH_BASE,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
                             )
                             TechTextField(
                                 value = imageBaseText,
@@ -219,9 +248,16 @@ fun TmdbSettingsScreen(
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             )
                             Text(
-                                text = "留空恢复默认：${TmdbClient.DEFAULT_IMAGE_BASE}",
+                                text = "留空恢复默认：",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                            Text(
+                                text = TmdbClient.DEFAULT_IMAGE_BASE,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
                             )
                         }
                     }

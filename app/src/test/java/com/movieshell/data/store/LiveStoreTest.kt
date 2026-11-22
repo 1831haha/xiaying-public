@@ -187,4 +187,65 @@ class LiveStoreTest {
         assertEquals("https://example.com/ch.xml", list[0].epgUrl)
         assertEquals("", list[0].playlistEpgUrl)
     }
+
+    // v1.4.13 第 3 步：套用候选——其它源下发的模板。
+
+    @Test
+    fun `collect templates from global subscription and channel`() {
+        val tplGlobal = "https://g.example.com/epg?ch={name}"
+        val tplSub = "https://t.example.com/{name}/{date}.xml"
+        val tplCh = "https://c.example.com/{name}.xml"
+        val sources = listOf(
+            LiveSource(name = "央视", url = "https://example.com/a.m3u", epg = tplSub),
+            LiveSource(name = "卫视", url = "https://example.com/b.m3u", epg = "https://example.com/plain.xml"),
+        )
+        val got = LiveStore.collectEpgTemplates(
+            sources,
+            listOf(epgChannel(epg = tplCh)),
+            tplGlobal,
+            "",
+        )
+        assertEquals(
+            listOf(
+                LiveStore.EpgTemplate(tplGlobal, "全局节目单"),
+                LiveStore.EpgTemplate(tplSub, "订阅「央视」"),
+                LiveStore.EpgTemplate(tplCh, "频道「CCTV-1」"),
+            ),
+            got,
+        )
+    }
+
+    @Test
+    fun `collect templates dedups keeps first label and caps at three`() {
+        val tpl2 = "https://t2.example.com/{name}.xml"
+        val tpl3 = "https://t3.example.com/{name}.xml"
+        val tpl4 = "https://t4.example.com/{name}.xml"
+        val tpl5 = "https://t5.example.com/{name}.xml"
+        val sources = listOf(
+            LiveSource(name = "央视", url = "https://example.com/a.m3u", epg = tpl2),
+            LiveSource(name = "卫视", url = "https://example.com/b.m3u", epg = tpl3),
+        )
+        val channels = listOf(
+            epgChannel(epg = tpl3, playlist = tpl4),
+            epgChannel(epg = tpl5, sourceKey = "m3u:卫视"),
+        )
+        val got = LiveStore.collectEpgTemplates(sources, channels, "https://example.com/plain.xml", "")
+        // tpl3 在订阅与频道各出现一次，只留第一次的标签（订阅级）；tpl5 被 3 条上限截掉。
+        assertEquals(
+            listOf(
+                LiveStore.EpgTemplate(tpl2, "订阅「央视」"),
+                LiveStore.EpgTemplate(tpl3, "订阅「卫视」"),
+                LiveStore.EpgTemplate(tpl4, "列表「央视」"),
+            ),
+            got,
+        )
+    }
+
+    @Test
+    fun `collect templates empty when none or all excluded`() {
+        assertTrue(LiveStore.collectEpgTemplates(listOf(subA), listOf(epgChannel()), "", "").isEmpty())
+        val tpl = "https://t.example.com/{name}.xml"
+        val sources = listOf(LiveSource(name = "央视", url = "https://example.com/a.m3u", epg = tpl))
+        assertTrue(LiveStore.collectEpgTemplates(sources, emptyList(), "", tpl).isEmpty())
+    }
 }

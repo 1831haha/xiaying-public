@@ -15,7 +15,9 @@ import okhttp3.Request
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.File
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
@@ -46,6 +48,46 @@ object EpgFetcher {
         val programs: Pair<Program?, Program?>,
         val layer: EpgLayer,
     )
+
+    /**
+     * v1.4.13 第 3 步：逐频道模板占位符——{name} 频道名、{date} 当天日期。
+     * 不含占位符仍走全量 XMLTV（老地址不用改）。
+     */
+    const val TEMPLATE_NAME = "{name}"
+    const val TEMPLATE_DATE = "{date}"
+
+    /** 是否含模板占位符（{name}/{date} 任一）。 */
+    fun isTemplate(url: String): Boolean =
+        url.contains(TEMPLATE_NAME) || url.contains(TEMPLATE_DATE)
+
+    /**
+     * 展开模板：{name}→URL 编码后的频道名，{date}→当天 yyyy-MM-dd（设备本地日期）。
+     * 无占位符原样返回；已展开过的再展开是无操作（幂等）。
+     * dateMs 是测试缝：单测注入固定日期验 {date}。
+     */
+    fun expandTemplate(
+        url: String,
+        channelName: String,
+        dateMs: Long = System.currentTimeMillis(),
+    ): String {
+        if (!isTemplate(url)) return url
+        var out = url
+        if (out.contains(TEMPLATE_NAME)) {
+            // v1.4.13 审稿 S1：URLEncoder 把空格编成 +，query 位合法、路径位
+            // 会走样（台名带空格时），统一换成 %20，两边都对。
+            out = out.replace(
+                TEMPLATE_NAME,
+                URLEncoder.encode(channelName.trim(), "UTF-8").replace("+", "%20"),
+            )
+        }
+        if (out.contains(TEMPLATE_DATE)) {
+            val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+                timeZone = TimeZone.getDefault()
+            }.format(Date(dateMs))
+            out = out.replace(TEMPLATE_DATE, day)
+        }
+        return out
+    }
 
     /** v0.188.0 M29：EPG 单文件下载上限 20MB，超限直接失败，不全量进内存。 */
     private const val MAX_EPG_BYTES = 20L * 1024L * 1024L
@@ -113,8 +155,11 @@ object EpgFetcher {
     suspend fun nowAndNext(epgUrl: String, channelName: String): Pair<Program?, Program?> =
         withContext(Dispatchers.IO) {
             runCatching {
+                // v1.4.13 第 3 步：模板先展开（{name}/{date}），缓存与熔断都按
+                // 展开后的地址算——同一模板按频道+日期各存一份缓存。
+                val url = expandTemplate(epgUrl, channelName)
                 // 当天缓存命中直接解析，不发网络请求。
-                val bytes = fetchBytes(epgUrl) ?: return@runCatching null to null
+                val bytes = fetchBytes(url) ?: return@runCatching null to null
                 // v0.158.0：.xml.gz 这类压缩包尽力解压（gzip 魔数 1f 8b），
                 // 普通 XML 直接按 UTF-8 解；解不开返回 (null, null)，不崩。
                 val xml = if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
@@ -144,12 +189,17 @@ object EpgFetcher {
         channelName: String,
         fetch: suspend (String, String) -> Pair<Program?, Program?> = { url, name -> nowAndNext(url, name) },
     ): EpgResult {
+        // v1.4.13 第 3 步：模板先展开再拉取——fetch 缝拿到的是最终地址，
+        // 单测可直接断言展开结果；展开后相同的两条只拉一次。
         val channelUrl = channelEpgUrl?.takeIf { it.isNotBlank() }
+            ?.let { expandTemplate(it, channelName) }
         if (channelUrl != null) {
             val r = fetch(channelUrl, channelName)
             if (r.first != null || r.second != null) return EpgResult(r, EpgLayer.CHANNEL)
         }
-        val globalUrl = globalEpgUrl.takeIf { it.isNotBlank() && it != channelUrl }
+        val globalUrl = globalEpgUrl.takeIf { it.isNotBlank() }
+            ?.let { expandTemplate(it, channelName) }
+            ?.takeIf { it != channelUrl }
         if (globalUrl != null) {
             val r = fetch(globalUrl, channelName)
             if (r.first != null || r.second != null) return EpgResult(r, EpgLayer.GLOBAL)
