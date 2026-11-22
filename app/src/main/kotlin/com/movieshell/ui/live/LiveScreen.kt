@@ -1,56 +1,25 @@
 package com.movieshell.ui.live
 
-import com.movieshell.ui.components.AppSearchBar
-import com.movieshell.ui.components.sheetListScrollGuard
-import com.movieshell.ui.components.V5Segmented
 
-import androidx.compose.material.icons.filled.GraphicEq
 
 import androidx.compose.foundation.lazy.rememberLazyListState
 
-import androidx.compose.foundation.lazy.LazyRow
 
 import com.movieshell.ui.theme.V5
 
-import com.movieshell.ui.components.V5Divider
-import com.movieshell.ui.components.V5IconButton
-import com.movieshell.ui.components.V5Tag
-import com.movieshell.ui.components.V5TagKind
-import com.movieshell.ui.components.V5Chip
 import com.movieshell.ui.components.dockClearance
-import com.movieshell.ui.components.v5BottomDivider
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.ui.unit.sp
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.StarBorder
-import android.content.ContentResolver
 import android.os.SystemClock
 import com.movieshell.ui.components.AppToast
 import android.content.Context
-import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
-import android.net.Uri
-import android.provider.OpenableColumns
 import android.app.Activity
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -61,31 +30,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.PlayArrow
 import com.movieshell.data.store.PlayerSettings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import com.movieshell.ui.components.TechDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -96,54 +51,35 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImagePainter
-import coil.compose.rememberAsyncImagePainter
-import coil.request.ImageRequest
-import coil.size.Size
 import com.movieshell.data.source.EpgFetcher
 import com.movieshell.data.store.LiveChannel
-import com.movieshell.data.store.LiveSource
 import com.movieshell.data.source_mgr.SubSiteStore
 import com.movieshell.data.store.LiveStore
 import com.movieshell.core.log.LogBus
-import com.movieshell.core.util.StoragePaths
 import com.movieshell.data.store.TrashStore
 import com.movieshell.player.EngineHost
 import com.movieshell.player.PlaySession
 import com.movieshell.player.PlaybackDiagnostic
 import com.movieshell.player.PlayerScreen
 import org.json.JSONObject
-import com.movieshell.ui.components.AppButton
-import com.movieshell.ui.components.AppButtonVariant
-import com.movieshell.ui.components.AppCard
-import com.movieshell.ui.components.AppSwitch
-import com.movieshell.ui.components.TechTextField
 import com.movieshell.ui.components.EmptyKind
 import com.movieshell.ui.components.EmptyState
-import com.movieshell.ui.components.TabTopBar
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+internal val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
 
 // v0.160.0：直播选中状态放内存单例，不放 remember——切 tab 离页重组、聚合刷新
 // 都不会丢选中频道和按台名选的源；聚合刷新本身只在 selected==null 时才取首台，
@@ -158,6 +94,8 @@ private object LiveSelection {
     // v0.171.0：分组与源行选中态也进单例，切 tab 离页重组不再回首组/全部
     var selectedGroup: String? = null
     var selectedLiveSource: String? = null
+    // v1.4.14：左列“更新时间”入口的上次刷新时间（毫秒，0=从未刷新）。
+    var lastRefreshMs: Long = 0
     // v0.294.5：本次进程里用户是否已主动点过播放（点过就不再受“直播自动播放”设置拦）
     var userStarted = false
     /** 本进程是否已从磁盘恢复过选中态（只恢复一次，之后以内存为准）。 */
@@ -168,6 +106,7 @@ private const val LIVE_SEL_CHANNEL = "live_sel_channel_id"
 private const val LIVE_SEL_SOURCE_BY_NAME = "live_sel_source_by_name"
 private const val LIVE_SEL_GROUP = "live_sel_group"
 private const val LIVE_SEL_LIVE_SOURCE = "live_sel_live_source"
+private const val LIVE_SEL_LAST_REFRESH = "live_sel_last_refresh_ms"
 
 /** 进程启动后第一次进直播页时，把磁盘上的选中态读进单例（只读一次）。 */
 private fun loadLiveSelection(context: Context) {
@@ -177,6 +116,7 @@ private fun loadLiveSelection(context: Context) {
     LiveSelection.channelId = prefs.getString(LIVE_SEL_CHANNEL, null)
     LiveSelection.selectedGroup = prefs.getString(LIVE_SEL_GROUP, null)
     LiveSelection.selectedLiveSource = prefs.getString(LIVE_SEL_LIVE_SOURCE, null)
+    LiveSelection.lastRefreshMs = prefs.getLong(LIVE_SEL_LAST_REFRESH, 0L)
     val raw = prefs.getString(LIVE_SEL_SOURCE_BY_NAME, null)
     if (!raw.isNullOrBlank()) {
         runCatching {
@@ -188,7 +128,7 @@ private fun loadLiveSelection(context: Context) {
     }
 }
 
-/** 把单例里的四项选中态写盘（apply 异步落盘；userStarted 故意不写）。 */
+/** 把单例里的选中态写盘（apply 异步落盘；userStarted 故意不写）。 */
 private fun saveLiveSelection(context: Context) {
     val obj = JSONObject()
     LiveSelection.sourceByName.forEach { (k, v) -> obj.put(k, v) }
@@ -197,10 +137,11 @@ private fun saveLiveSelection(context: Context) {
         .putString(LIVE_SEL_SOURCE_BY_NAME, obj.toString())
         .putString(LIVE_SEL_GROUP, LiveSelection.selectedGroup)
         .putString(LIVE_SEL_LIVE_SOURCE, LiveSelection.selectedLiveSource)
+        .putLong(LIVE_SEL_LAST_REFRESH, LiveSelection.lastRefreshMs)
         .apply()
 }
 
-/** 直播 Tab：DsPlayer 式布局（v0.80.0 重做）——顶部 16:9 播放器 + 节目信息卡 + 两列（分组/频道）+ 播放器下方源行 */
+/** 直播 Tab：DsPlayer 式布局（v0.80.0 重做）——顶部 16:9 播放器 + 节目信息卡 + 三列（分组/频道/源） */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun LiveScreen(
@@ -210,7 +151,6 @@ fun LiveScreen(
     onOpenPluginCenter: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val channels by LiveStore.channels.collectAsState()
     var query by rememberSaveable { mutableStateOf("") }
     var showSearch by remember { mutableStateOf(false) }
@@ -233,6 +173,10 @@ fun LiveScreen(
     // v1.3.33：进程首次进页先从磁盘恢复单例（loadLiveSelection 只读一次），
     // 下面三个初值拿到的就是进程被杀前选的台/分组/源行。
     loadLiveSelection(context)
+    // v1.4.14：上次刷新时间（左列“更新时间”第二行小字；只在刷新成功时更新）——
+    // 声明必须放在 loadLiveSelection 之后，否则初值读到的是 hydration 之前的 0，
+    // 首进恒显示「未刷新」。
+    var lastRefreshMs by remember { mutableStateOf(LiveSelection.lastRefreshMs) }
     var selectedGroup by remember { mutableStateOf(LiveSelection.selectedGroup) }
     // v0.158.0：直播页内换源（null=全部，DsPlayer 切换直播源对标）；
     // 直播失败已试过的同名源 id（自动切源防循环，手动点频道/源时清空）
@@ -293,6 +237,10 @@ fun LiveScreen(
                 runCatching { LiveStore.refresh(context) }
                     // v0.107.0 P0-9：订阅 0 频道不再静默，给可见提示
                     .onSuccess { empties ->
+                        // v1.4.14：刷新成功才记时间（失败不记，左列第二行小字如实显示）。
+                        lastRefreshMs = System.currentTimeMillis()
+                        LiveSelection.lastRefreshMs = lastRefreshMs
+                        saveLiveSelection(context)
                         if (empties.isNotEmpty()) {
                             AppToast.show(context, "以下订阅未解析出频道：${empties.joinToString("、")}", long = true)
                         }
@@ -427,11 +375,10 @@ fun LiveScreen(
         if (selected != null) lastPlayStartMs = SystemClock.elapsedRealtime()
     }
 
-    val filtered = remember(channels, query, selectedLiveSource) {
-        channels.filter {
-            (selectedLiveSource == null || it.sourceKey == selectedLiveSource) &&
-                (query.isBlank() || it.name.contains(query, ignoreCase = true))
-        }
+    // v1.4.14 三列：搜索只滤当前分组（在中列里对 groupChannelsDistinct 滤），
+    // 不再参与整个频道列表的过滤——左列分组搜的时候不能变。
+    val filtered = remember(channels, selectedLiveSource) {
+        channels.filter { selectedLiveSource == null || it.sourceKey == selectedLiveSource }
     }
     val sourceKeys = remember(channels) { channels.map { it.sourceKey }.distinct() }
     // v0.158.0：换源后自动播该源第一个频道（DsPlayer 切源即播该源）；全部则不动当前播放
@@ -484,13 +431,14 @@ fun LiveScreen(
     // v0.159.0：中列按台名去重，每台只显示一条——显示的是该台上次选的源，
     // 没选过才取第一条；否则中列下面会再出现一遍同名台，点它又回源1
     val groupChannelsDistinct = remember(groupChannels, liveSourceByName) {
-        groupChannels.groupBy { it.name }.values.map { list ->
-            liveSourceByName[list.first().name]?.let { id ->
-                list.firstOrNull { it.id == id }
-            } ?: list.first()
-        }
+        distinctChannelsByName(groupChannels, liveSourceByName)
     }
-    // 同名多线路 = 源1..N（v0.160.0 起放播放器下方源行，原右列已删）
+    // v1.4.14 三列：搜索只滤当前分组内的台（中列搜索框），左列分组不动。
+    val displayChannels = remember(groupChannelsDistinct, query) {
+        if (query.isBlank()) groupChannelsDistinct
+        else groupChannelsDistinct.filter { it.name.contains(query, ignoreCase = true) }
+    }
+    // 同名多线路 = 源1..N（右列；v0.160.0 起放播放器下方，1.4.14 回右列）
     val sources = remember(channels, selected) {
         val name = selected?.name
         if (name.isNullOrBlank()) emptyList()
@@ -663,115 +611,103 @@ fun LiveScreen(
             // v0.96.2：横屏全屏只留播放器，其他 UI 隐藏
             if (!fullscreenPlayer) {
             // v0.292.0 V5（design-tokens 5.3）：「正在播」卡——surfaceContainer 24dp 圆角；
-            // 头部右侧 搜索频道 / 收藏（tonal 星）/ 直播设置 三个图标按钮（v0.176.0 从顶栏移来，位置不变）；
-            // 节目进度条、下一档、同名多源 源1/源2/源3 分段按钮（原播放器下方“线路”行并进卡里）。
+            // 节目进度条、下一档；头部只留展开/收起箭头。
+            // v1.4.14 三列：搜索/收藏/设置图标移到中列当前台条，同名源分段按钮移到右列；
             ProgramInfoCard(
                 channel = playing,
                 epg = epg,
                 epgFromGlobal = epgFromGlobal,
                 hasEpgSource = (sourceEpgUrl.isNotBlank() || globalEpg.isNotBlank()),
-                isFavorite = channels.firstOrNull { it.id == playing?.id }?.favorite == true,
-                onSearchClick = { showSearch = !showSearch },
-                onFavoriteClick = {
-                    playing?.let { LiveStore.toggleFavorite(context, it.id) }
-                },
-                onSettingsClick = { showLiveSettings = true },
-                sourceCount = if (sources.size > 1) sources.size else 0,
-                selectedSourceIndex = sources.indexOfFirst { it.id == selected?.id },
-                onSelectSource = { idx -> sources.getOrNull(idx)?.let { playChannel(it) } },
-                failedSourceIndices = sources.indices.filter { sources[it].id in liveFailedIds }.toSet(),
-                onLongSelectSource = { idx -> sources.getOrNull(idx)?.let { sourceDetail = it } },
             )
-            // 原“直播页内换源条（全部 + 各源）”按设计稿从主屏移走：同一功能在 直播设置 弹层
-            // 第一个页签「切换直播源」（“切回接口默认直播源”=全部 + 各源单选），状态共用 selectedLiveSource。
-            // 搜索行（默认收起，点卡片放大镜展开）
-            if (showSearch) {
-                // v0.294.6：统一 AppSearchBar；展开即聚焦
-                AppSearchBar(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    placeholder = "搜索频道",
-                    autoFocus = true,
-                )
-            }
-            if (refreshing) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text("正在拉取直播源…", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            if (filtered.isEmpty() && !refreshing) {
+            if (filtered.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                     contentAlignment = Alignment.Center,
                 ) {
-                    EmptyState(
-                        kind = EmptyKind.Empty,
-                        icon = Icons.Filled.Tv,
-                        title = "还没有直播频道",
-                        // v0.96.1：插件更新/重装瞬间聚合会短暂为 0，给明确指引而不是干等
-                        hint = "插件更新或重装时请稍候，在直播设置里点刷新重试；\n或在直播设置里进订阅管理添加 M3U 订阅、去插件市场安装 live 插件",
-                    )
+                    if (refreshing) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("正在拉取直播源…", style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        EmptyState(
+                            kind = EmptyKind.Empty,
+                            icon = Icons.Filled.Tv,
+                            title = "还没有直播频道",
+                            // v0.96.1：插件更新/重装瞬间聚合会短暂为 0，给明确指引而不是干等
+                            hint = "插件更新或重装时请稍候，在直播设置里点刷新重试；\n或在直播设置里进订阅管理添加 M3U 订阅、去插件市场安装 live 插件",
+                        )
+                    }
                 }
                 return@Column
             }
-            // v0.292.0 V5：分组改横排 FilterChip（全部分组照旧，“我的收藏”带星），下面单列频道列表
-            // （原左列分组 + 中列频道两栏）；选中/记忆逻辑不变（LiveSelection.selectedGroup）。
+            // 三列：左分组（84dp）/ 中频道（flex）/ 右同名源（64dp），间距 8dp；
+            // 窄屏 <340dp 时左 76dp / 右 56dp。点频道直接播，点右列源直接切，
+            // 不再翻节目卡里的源分段按钮。
+            val isNarrow = LocalConfiguration.current.screenWidthDp < 340
+            val leftWidth = if (isNarrow) 76.dp else 84.dp
+            val rightWidth = if (isNarrow) 56.dp else 64.dp
             val groupListState = rememberLazyListState()
-            LaunchedEffect(Unit) {
-                val i = groupNames.indexOf(selectedGroup)
-                if (i > 0) groupListState.scrollToItem(i)
+            val channelListState = rememberLazyListState()
+            val sourceListState = rememberLazyListState()
+            val lastRefreshText = remember(lastRefreshMs) {
+                if (lastRefreshMs <= 0L) "未刷新"
+                else "上次 " + timeFmt.format(Date(lastRefreshMs))
             }
-            LazyRow(
-                state = groupListState,
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(groupNames, key = { it }) { g ->
-                    V5Chip(
-                        text = g,
-                        selected = g == selectedGroup,
-                        leadingIcon = if (g == "我的收藏") Icons.Outlined.StarBorder else null,
-                        onClick = {
-                            selectedGroup = g
-                            LiveSelection.selectedGroup = g
-                            saveLiveSelection(context)
-                        },
-                    )
-                }
-            }
-            LazyColumn(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = dockClearance() + 8.dp),
+                    .weight(1f)
+                    .padding(start = 8.dp, end = 8.dp, bottom = dockClearance() + 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // v0.133.0：频道 id 由 sourceKey 与 url 拼接，同源重复条目或同名订阅可撞，加下标复合
-                items(
-                    items = groupChannelsDistinct.withIndex().toList(),
-                    key = { "${it.index}_${it.value.id}" },
-                ) { (idx, ch) ->
-                    ChannelCell(
-                        index = idx + 1,
-                        channel = ch,
-                        isPlaying = isSameChannel(selected?.id, ch.id),
-                        nowTitle = nowTitleForChannel(selected?.id, ch.id, epg?.first?.title),
-                        onClick = { playChannel(ch) },
-                        onLongClick = { detailChannel = ch },
-                        onFavorite = { LiveStore.toggleFavorite(context, ch.id) },
-                    )
-                }
+                LiveGroupColumn(
+                    groupNames = groupNames,
+                    selectedGroup = selectedGroup,
+                    onSelectGroup = { g ->
+                        selectedGroup = g
+                        LiveSelection.selectedGroup = g
+                        saveLiveSelection(context)
+                    },
+                    lastRefreshText = lastRefreshText,
+                    refreshing = refreshing,
+                    onRefresh = { doRefresh() },
+                    listState = groupListState,
+                    modifier = Modifier.width(leftWidth).fillMaxHeight(),
+                )
+                LiveChannelColumn(
+                    channels = displayChannels,
+                    selectedId = selected?.id,
+                    currentChannel = playing,
+                    isFavorite = channels.firstOrNull { it.id == playing?.id }?.favorite == true,
+                    onSearchClick = { showSearch = !showSearch },
+                    onSettingsClick = { showLiveSettings = true },
+                    onFavoriteClick = {
+                        playing?.let { LiveStore.toggleFavorite(context, it.id) }
+                    },
+                    showSearch = showSearch,
+                    query = query,
+                    onQueryChange = { query = it },
+                    refreshing = refreshing,
+                    groupKey = selectedGroup,
+                    onSelectChannel = { playChannel(it) },
+                    onToggleFavorite = { LiveStore.toggleFavorite(context, it.id) },
+                    onLongClickChannel = { detailChannel = it },
+                    listState = channelListState,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+                LiveSourceColumn(
+                    sources = sources,
+                    selectedId = selected?.id,
+                    failedIds = liveFailedIds,
+                    onSelectSource = { playChannel(it) },
+                    onLongPressSource = { sourceDetail = it },
+                    listState = sourceListState,
+                    modifier = Modifier.width(rightWidth).fillMaxHeight(),
+                )
             }
             } // v0.96.2 if (!fullscreenPlayer)
         }
@@ -830,7 +766,7 @@ fun LiveScreen(
         )
     }
 
-    // v1.4.9：源详情（长按节目卡源 N）：来源显示名 + host + 完整 URL，
+    // v1.4.9：源详情（长按右列源行）：来源显示名 + host + 完整 URL，
     // 确认即按 URL 隐藏该条流（不删订阅、不删台）。
     sourceDetail?.let { ch ->
         val detailIndex = sources.indexOfFirst { it.id == ch.id }
@@ -880,772 +816,16 @@ fun LiveScreen(
     }
 }
 
-/**
- * v0.176.0：DS 式直播设置弹层——对标 DS“直播设置”底部弹层：
- * 标题右上角刷新、两胶囊“切换直播源 / EPG 设置”、源单选列表
- * （手动/接口标签、“切回接口默认直播源”）。订阅的增删、本地导入、
- * 手动加频道仍走原“直播订阅管理”整页，本弹层只给入口，不重复造。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LiveSettingsSheet(
-    sourceKeys: List<String>,
-    selectedLiveSource: String?,
-    globalEpg: String,
-    // v1.4.12 第 2 步：跟随开关状态、当前生效的本源 EPG 地址、有节目单的源 key 集合。
-    followSourceEpg: Boolean,
-    currentEpgUrl: String,
-    hasSelected: Boolean,
-    epgSourceKeys: Set<String> = emptySet(),
-    // v1.4.9：已隐藏的流 URL 与逐条恢复回调（恢复后调用方刷新拉回）。
-    hiddenStreams: List<String> = emptyList(),
-    onUnhideStream: (String) -> Unit = {},
-    onDismiss: () -> Unit,
-    onRefresh: () -> Unit,
-    onSelectLiveSource: (String?) -> Unit,
-    onManageClick: () -> Unit,
-) {
-    val context = LocalContext.current
-    var tab by remember { mutableStateOf(0) }
-    var epgText by remember(globalEpg) { mutableStateOf(globalEpg) }
-    // v0.294.2：弹窗内滚动不在顶时下滑只滚内容，不拖动/收起弹窗
-    val sheetScroll = rememberScrollState()
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(
-            topStart = V5.CornerXl,
-            topEnd = V5.CornerXl,
-        ),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .sheetListScrollGuard { sheetScroll.canScrollBackward }
-                .verticalScroll(sheetScroll)
-                .padding(horizontal = 24.dp, vertical = 8.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "直播设置",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onRefresh) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "刷新直播源")
-                }
-            }
-            Text(
-                text = "切换生效直播源 / 配置 EPG 节目单兜底源",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            // v0.292.0 V5：两页签改 M3 分段按钮——第一个「切换直播源」（接口/源切换，原主屏 chip 行的同一功能），第二个「EPG 设置」
-            V5Segmented(
-                options = listOf("切换直播源", "EPG 设置"),
-                selected = tab,
-                onSelect = { tab = it },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(12.dp))
-            if (tab == 0) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onSelectLiveSource(null) }
-                        .padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "切回接口默认直播源",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (selectedLiveSource == null) FontWeight.Bold else FontWeight.Normal,
-                        color = if (selectedLiveSource == null) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                if (sourceKeys.isEmpty()) {
-                    Text(
-                        text = "暂无直播源",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                sourceKeys.forEach { key ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelectLiveSource(key) }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = selectedLiveSource == key,
-                            onClick = { onSelectLiveSource(key) },
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = liveSourceLabel(key),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = if (selectedLiveSource == key) FontWeight.Bold else FontWeight.Normal,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        // v1.4.12 第 2 步：该源有自带节目单（频道属性或列表地址）时打“已配”，
-                        // 只看有没有、不探活（没探活不能打 ✓）。
-                        if (key in epgSourceKeys) {
-                            Text(
-                                text = "已配",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        Text(
-                            text = if (key == "manual") "手动" else "接口",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                // v1.4.9：已隐藏的源（长按节目卡源按钮藏起来的单条流），
-                // 可逐条恢复；恢复后刷新拉回。
-                if (hiddenStreams.isNotEmpty()) {
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = "已隐藏的源",
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Text(
-                        text = "单条死流藏在这里，恢复后刷新拉回",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    hiddenStreams.forEach { hiddenUrl ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = LiveStore.hostOfUrl(hiddenUrl).ifBlank { hiddenUrl },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = hiddenUrl,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            TextButton(onClick = { onUnhideStream(hiddenUrl) }) {
-                                Text("恢复")
-                            }
-                        }
-                    }
-                }
-            } else {
-                // v1.4.12 第 2 步：跟随开关（默认开）＋当前生效的本源 EPG 地址。
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "跟随电视源的 EPG",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            text = "开：先用电视源自带的节目单，失效再回落全局；关：只用全局节目单",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    AppSwitch(
-                        checked = followSourceEpg,
-                        onCheckedChange = { LiveStore.setFollowSourceEpg(context, it) },
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = "当前生效源的 EPG",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    text = when {
-                        !hasSelected -> "未选台"
-                        !followSourceEpg -> "跟随已关，只用全局节目单"
-                        currentEpgUrl.isNotBlank() -> currentEpgUrl
-                        else -> "未配置"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    text = "全局节目单（兜底）",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    text = "本源无节目单时用它查正在播 / 下一档；不填则不兜底，不内置任何源",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                TechTextField(
-                    value = epgText,
-                    onValueChange = { epgText = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = "https://…/xxx.xml",
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AppButton(
-                        text = "保存",
-                        onClick = {
-                            LiveStore.setGlobalEpgUrl(context, epgText)
-                            AppToast.show(context, if (epgText.isBlank()) "已清除全局节目单地址" else "已保存全局节目单地址", long = false)
-                        },
-                        variant = AppButtonVariant.Primary,
-                    )
-                    AppButton(
-                        text = "清除",
-                        onClick = {
-                            epgText = ""
-                            LiveStore.setGlobalEpgUrl(context, "")
-                        },
-                        variant = AppButtonVariant.Secondary,
-                    )
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            AppButton(
-                text = "直播订阅管理",
-                onClick = onManageClick,
-                variant = AppButtonVariant.Secondary,
-            )
-            Text(
-                text = "添加/删除订阅、导入本地、手动加频道走整页",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-}
-
-/**
- * v0.80.0：节目信息卡（对标 DsPlayer 播放器下方那张卡）。
- * v0.292.0 V5：「正在播」卡——surfaceContainer 24dp 圆角，16dp 内边距：
- * 头部「正在播 · 开始–结束」（labelLarge primary）+ 节目名（titleMedium），右侧 搜索频道 / 收藏（tonal）/ 直播设置；
- * 节目进度（4dp）；底部 下一档 + 同名多源 源1/源2/… 分段按钮。无 EPG 时显示台名 + 提示。
- */
-@Composable
-private fun ProgramInfoCard(
-    channel: LiveChannel?,
-    epg: Pair<EpgFetcher.Program?, EpgFetcher.Program?>?,
-    // v1.4.11 第 1 步：节目单来自全局兜底时打“全局”小标（仅兜底命中时）。
-    epgFromGlobal: Boolean = false,
-    hasEpgSource: Boolean = true,
-    // v0.176.0：顶栏去掉后，搜索/收藏/设置移到这张卡右侧（对标 DS 频道头齿轮+爱心）
-    isFavorite: Boolean = false,
-    onSearchClick: () -> Unit = {},
-    onFavoriteClick: () -> Unit = {},
-    onSettingsClick: () -> Unit = {},
-    // v0.160.0：同名源（源1/源2…）全局切换，>1 个才显示
-    sourceCount: Int = 0,
-    selectedSourceIndex: Int = -1,
-    onSelectSource: (Int) -> Unit = {},
-    // v1.4.9：本会话失败过的源下标（红点）与长按回调（弹源详情）。
-    failedSourceIndices: Set<Int> = emptySet(),
-    onLongSelectSource: ((Int) -> Unit)? = null,
-) {
-    val (now, next) = epg ?: (null to null)
-    val v = MaterialTheme.colorScheme
-    Column(
-        modifier = Modifier
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(V5.CornerCard))
-            .background(v.surfaceContainer)
-            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                if (now != null) {
-                    Text(
-                        text = "正在播" + (if (epgFromGlobal) " · 全局" else "") +
-                            " · ${timeFmt.format(Date(now.startMs))}–${timeFmt.format(Date(now.stopMs))}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = v.primary,
-                        maxLines = 1,
-                    )
-                    Text(
-                        text = now.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = v.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                } else {
-                    Text(
-                        text = listOfNotNull(
-                            channel?.name ?: "暂无频道",
-                            channel?.group?.takeIf { it.isNotBlank() },
-                        ).joinToString(" · "),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = v.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = if (!hasEpgSource) "暂无节目单，可在直播设置 EPG 里填全局节目单地址" else "节目单加载中…",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = v.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            // v0.176.0：顶栏移过来的三个入口，无频道时只留搜索和设置，收藏无台可收
-            V5IconButton(Icons.Outlined.Search, "搜索频道", onSearchClick)
-            if (channel != null) {
-                Spacer(Modifier.width(4.dp))
-                V5IconButton(
-                    if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                    if (isFavorite) "取消收藏" else "收藏",
-                    onFavoriteClick,
-                    tonal = true,
-                    size = 44.dp,
-                )
-                Spacer(Modifier.width(4.dp))
-            }
-            V5IconButton(Icons.Outlined.Settings, "直播设置", onSettingsClick)
-        }
-        if (now != null && now.stopMs > now.startMs) {
-            val p = ((System.currentTimeMillis() - now.startMs).toFloat() / (now.stopMs - now.startMs)).coerceIn(0f, 1f)
-            Spacer(Modifier.height(10.dp))
-            Box(
-                Modifier
-                    .padding(end = 8.dp)
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(v.surfaceContainerHighest),
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxWidth(p)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(v.primary),
-                )
-            }
-        }
-        // v1.4.11 审稿 S1：有正在播、无下一档时也要显示“暂无下一档信息”，
-        // 不只多源时才显示（单源无下一档是常见情况）。
-        if (next != null || now != null || sourceCount > 1) {
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 8.dp)) {
-                Text(
-                    text = if (next != null) {
-                        "下一档" + (if (epgFromGlobal && now == null) " · 全局" else "") +
-                            " ${timeFmt.format(Date(next.startMs))} ${next.title}"
-                    } else if (now != null) {
-                        "暂无下一档信息"
-                    } else {
-                        (channel?.name ?: "")
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = v.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                if (sourceCount > 1) {
-                    Spacer(Modifier.width(8.dp))
-                    // 源多时横滑；每格最少 52dp
-                    Box(Modifier.widthIn(max = 220.dp).horizontalScroll(rememberScrollState())) {
-                        V5Segmented(
-                            options = List(sourceCount) { "源${it + 1}" },
-                            selected = selectedSourceIndex,
-                            onSelect = onSelectSource,
-                            height = 32.dp,
-                            modifier = Modifier.width((sourceCount * 62).dp),
-                            onLongSelect = onLongSelectSource,
-                            failed = failedSourceIndices,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
 
 // v0.158.0：直播源显示名（m3u:订阅名 / plugin:文件名 / 手动添加）
-private fun liveSourceLabel(key: String): String = when {
+internal fun liveSourceLabel(key: String): String = when {
     key == "manual" -> "手动添加"
     key.startsWith("m3u:") -> key.removePrefix("m3u:")
     key.startsWith("plugin:") -> key.removePrefix("plugin:")
     else -> key
 }
 
-/** v0.80.0：分组按钮（v0.292.0 V5 起主屏改用 FilterChip 横排，本组件保留未用）。 */
-@Composable
-private fun GroupButton(
-    name: String,
-    count: Int,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val v = MaterialTheme.colorScheme
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .background(if (selected) v.surfaceContainer else Color.Transparent)
-            .drawBehind {
-                if (selected) drawRect(v.primary, size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
-            }
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Text(
-            text = name,
-            fontSize = 12.5.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) v.onSurface else v.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
 
-/**
- * v0.80.0：频道格。v0.292.0 V5：72dp M3 列表项——48dp 台标块（14dp 圆角，无台标时台名缩写）、
- * 台名 bodyLarge + 第二行（在播节目 / 分组 / 过期）、尾部在播均衡器图标或收藏星；在播行 secondaryContainer 20dp 圆角。
- */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun ChannelCell(
-    index: Int,
-    channel: LiveChannel,
-    isPlaying: Boolean,
-    nowTitle: String? = null,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onFavorite: () -> Unit,
-) {
-    val v = MaterialTheme.colorScheme
-    val context = LocalContext.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = V5.RowChannel)
-            .clip(RoundedCornerShape(V5.CornerLgI))
-            .background(if (isPlaying) v.secondaryContainer else Color.Transparent)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(start = 8.dp, end = 0.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(if (isPlaying) v.primaryContainer else v.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
-        ) {
-            // v1.4.8 A3(a)：台标只显示不读像素；加载中/失败先显示首字块，
-            // 图到后再换图片，不留空白块。
-            // 1.3.2 的教训：只读 state 的画笔必须给 ImageRequest 显式尺寸，
-            // 否则 coil 不发请求、state 永远到不了 Success。
-            val logoRequest = remember(channel.logo) {
-                ImageRequest.Builder(context)
-                    .data(channel.logo)
-                    .size(Size.ORIGINAL)
-                    .build()
-            }
-            val logoPainter = rememberAsyncImagePainter(model = logoRequest)
-            val logoReady = channel.logo.isNotBlank() &&
-                logoPainter.state is AsyncImagePainter.State.Success
-            if (logoReady) {
-                Image(
-                    painter = logoPainter,
-                    contentDescription = channel.name,
-                    modifier = Modifier.fillMaxSize().padding(6.dp),
-                    contentScale = ContentScale.Fit,
-                )
-            } else {
-                Text(
-                    text = channel.name.replace(Regex("[\\s\\-]"), "").take(3).ifBlank { "%02d".format(index) },
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isPlaying) v.onPrimaryContainer else v.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
-        }
-        Spacer(Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = channel.name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = if (isPlaying) FontWeight.Medium else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = if (isPlaying) v.onSecondaryContainer else v.onSurface,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val second = nowTitle ?: channel.group.ifBlank { "第 $index 台" }
-                Text(
-                    text = second,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = v.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (channel.stale) {
-                    Spacer(Modifier.width(6.dp))
-                    V5Tag("过期", V5TagKind.Live)
-                }
-            }
-        }
-        if (isPlaying) {
-            Icon(
-                Icons.Filled.GraphicEq,
-                contentDescription = "正在播放",
-                tint = v.primary,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-        IconButton(onClick = onFavorite, modifier = Modifier.size(48.dp)) {
-            Icon(
-                if (channel.favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                contentDescription = if (channel.favorite) "取消收藏" else "收藏",
-                tint = if (channel.favorite) v.primary else v.onSurfaceVariant,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-    }
-}
-
-/** v0.80.0：线路按钮（v0.279.0 旧版：分段控件里的一格，选中 s3 + t1 600）。 */
-@Composable
-private fun SourceButton(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val v = MaterialTheme.colorScheme
-    Box(
-        modifier = Modifier
-            .widthIn(min = 50.dp)
-            .height(28.dp)
-            .clip(RoundedCornerShape(V5.CornerMd))
-            .background(if (selected) v.surfaceContainerHighest else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) v.onSurface else v.onSurfaceVariant,
-            maxLines = 1,
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ChannelDetailSheet(
-    channel: LiveChannel,
-    onDismiss: () -> Unit,
-    onPlay: () -> Unit,
-    onFavorite: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
-    var epg by remember(channel.id) { mutableStateOf<Pair<EpgFetcher.Program?, EpgFetcher.Program?>?>(null) }
-    // v1.4.11 第 1 步：节目单来自全局兜底时打“全局”小标（仅兜底命中时）。
-    var epgFromGlobal by remember(channel.id) { mutableStateOf(false) }
-    var epgLoading by remember(channel.id) { mutableStateOf(false) }
-    val globalEpgDetail by LiveStore.globalEpg.collectAsState()
-    val followSourceEpgDetail by LiveStore.followSourceEpg.collectAsState()
-    val liveSourcesDetail by LiveStore.sources.collectAsState()
-    // v1.4.12 第 2 步：详情弹层也走四级解析后的本源地址。
-    val sourceEpgUrlDetail = remember(channel.id, liveSourcesDetail, followSourceEpgDetail) {
-        LiveStore.resolveSourceEpgUrl(channel, liveSourcesDetail, followSourceEpgDetail)
-    }
-
-    LaunchedEffect(channel.id, globalEpgDetail, followSourceEpgDetail, sourceEpgUrlDetail) {
-        if (sourceEpgUrlDetail.isNotBlank() || globalEpgDetail.isNotBlank()) {
-            epgLoading = true
-            val result = EpgFetcher.nowAndNextWithFallback(sourceEpgUrlDetail, globalEpgDetail, channel.name)
-            epg = result.programs.takeIf { it.first != null || it.second != null }
-            epgFromGlobal = result.layer == EpgFetcher.EpgLayer.GLOBAL
-            epgLoading = false
-        }
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(
-            topStart = V5.CornerMd,
-            topEnd = V5.CornerMd,
-        ),
-        containerColor = MaterialTheme.colorScheme.surface,
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    // v1.4.8 A3(a)：与 ChannelCell 同口径，加载中/失败落 Tv 图标块。
-                    // 画笔同 ChannelCell：带 size(Size.ORIGINAL) 的 ImageRequest，
-                    // 否则 coil 不发请求、state 永远到不了 Success（1.3.2 教训）。
-                    val logoRequest = remember(channel.logo) {
-                        ImageRequest.Builder(context)
-                            .data(channel.logo)
-                            .size(Size.ORIGINAL)
-                            .build()
-                    }
-                    val logoPainter = rememberAsyncImagePainter(model = logoRequest)
-                    val logoReady = channel.logo.isNotBlank() &&
-                        logoPainter.state is AsyncImagePainter.State.Success
-                    if (logoReady) {
-                        Image(
-                            painter = logoPainter,
-                            contentDescription = channel.name,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit,
-                        )
-                    } else {
-                        Icon(Icons.Filled.Tv, contentDescription = null)
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        channel.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        (channel.group.ifBlank { "未分组" }) + " · " +
-                            when {
-                                channel.sourceKey.startsWith("manual") -> "手动添加"
-                                channel.sourceKey.startsWith("m3u:") -> "订阅：" + channel.sourceKey.removePrefix("m3u:")
-                                else -> "本地源"
-                            },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = onFavorite) {
-                    Icon(
-                        if (channel.favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
-                        contentDescription = "收藏",
-                        tint = if (channel.favorite) MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            // EPG：当前 + 后续（尽力展示）
-            if (sourceEpgUrlDetail.isNotBlank() || globalEpgDetail.isNotBlank()) {
-                Text(
-                    if (epgFromGlobal) "节目单 · 全局" else "节目单",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(4.dp))
-                when {
-                    epgLoading -> Text("加载中…", style = MaterialTheme.typography.bodySmall)
-                    epg == null || (epg?.first == null && epg?.second == null) ->
-                        Text("暂无节目数据", style = MaterialTheme.typography.bodySmall)
-                    else -> {
-                        epg?.first?.let { p ->
-                            Text(
-                                "正在播：${p.title}（${timeFmt.format(Date(p.startMs))}–${timeFmt.format(Date(p.stopMs))}）",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                        epg?.second?.let { p ->
-                            Text(
-                                "接下来：${p.title}（${timeFmt.format(Date(p.startMs))}）",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (epg?.first != null && epg?.second == null) {
-                            Text(
-                                "暂无下一档信息",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AppButton(
-                    text = "播放",
-                    onClick = onPlay,
-                    modifier = Modifier.weight(1f),
-                    variant = AppButtonVariant.Primary,
-                )
-                AppButton(
-                    text = "复制地址",
-                    onClick = {
-                        clipboard.setText(AnnotatedString(channel.url))
-                        AppToast.show(context, "播放地址已复制", long = false)
-                    },
-                    variant = AppButtonVariant.Secondary,
-                )
-                if (channel.manual) {
-                    AppButton(
-                        text = "删除",
-                        onClick = onDelete,
-                        variant = AppButtonVariant.Ghost,
-                    )
-                }
-            }
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-}
-
-/** 读 content Uri 的显示文件名，失败返回 null */
-private fun displayNameOf(resolver: ContentResolver, uri: Uri): String? {
-    resolver.query(uri, null, null, null, null)?.use { c ->
-        val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-        if (idx >= 0 && c.moveToFirst()) return c.getString(idx)
-    }
-    return null
-}
-
-/**
- * v1.3.33：把当前频道拼成标准 M3U 文本（纯函数，可单测）。
- * - 全局 EPG 地址放 #EXTM3U 的 x-tvg-url；
- * - 每频道一行 #EXTINF：tvg-id（频道稳定 id，供 EPG 按台匹配）/ tvg-name /
- *   tvg-logo / group-title + 台名，下一行播放地址；
- * - 应用内收藏状态不进标准字段（不发明自定义字段），需要时调用方另行处理。
- */
 /**
  * v1.4.8 A3(f)：频道身份按稳定 id 比较，不按 name——同名多源时只给
  * 选中台显示在播节目名。
@@ -1656,473 +836,16 @@ internal fun isSameChannel(selectedId: String?, channelId: String): Boolean =
 internal fun nowTitleForChannel(selectedId: String?, channelId: String, epgTitle: String?): String? =
     if (isSameChannel(selectedId, channelId)) epgTitle else null
 
-internal fun buildM3uExport(channels: List<LiveChannel>, globalEpg: String): String {
-    fun attr(v: String): String = v.replace('"', '\'').replace('\n', ' ').replace('\r', ' ').trim()
-    val sb = StringBuilder()
-    val epg = globalEpg.trim()
-    if (epg.isNotEmpty()) sb.append("#EXTM3U x-tvg-url=\"${attr(epg)}\"\n")
-    else sb.append("#EXTM3U\n")
-    channels.filter { it.url.isNotBlank() }.forEach { ch ->
-        sb.append("#EXTINF:-1")
-        if (ch.id.isNotBlank()) sb.append(" tvg-id=\"${attr(ch.id)}\"")
-        if (ch.name.isNotBlank()) sb.append(" tvg-name=\"${attr(ch.name)}\"")
-        if (ch.logo.isNotBlank()) sb.append(" tvg-logo=\"${attr(ch.logo)}\"")
-        if (ch.group.isNotBlank()) sb.append(" group-title=\"${attr(ch.group)}\"")
-        sb.append(",${ch.name.ifBlank { "未知频道" }.replace('\n', ' ').trim()}\n")
-        sb.append("${ch.url.trim()}\n")
-    }
-    return sb.toString()
+/**
+ * v1.4.14 三列：中列按台名去重，每台只显示一条——显示的是该台上次选的源，
+ * 没选过才取第一条；记的源 id 已失效也回落第一条。纯函数，可单测。
+ */
+internal fun distinctChannelsByName(
+    channels: List<LiveChannel>,
+    sourceByName: Map<String, String>,
+): List<LiveChannel> = channels.groupBy { it.name }.values.map { list ->
+    sourceByName[list.first().name]?.let { id ->
+        list.firstOrNull { it.id == id }
+    } ?: list.first()
 }
 
-/** 直播订阅管理：M3U 订阅 URL / 本地 M3U 导入 / 手动添加频道 */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LiveManageScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val sources by LiveStore.sources.collectAsState()
-    // v1.4.13 第 3 步：套用候选要看频道 epg 属性与全局地址。
-    val channels by LiveStore.channels.collectAsState()
-    val globalEpg by LiveStore.globalEpg.collectAsState()
-    var showAddSub by remember { mutableStateOf(false) }
-    var showAddChannel by remember { mutableStateOf(false) }
-    // v0.158.0：全局节目单兜底地址（用户自填，不内置源）
-    var globalEpgText by remember { mutableStateOf(LiveStore.globalEpgUrl(context)) }
-    var refreshing by remember { mutableStateOf(false) }
-    // v1.3.33：M3U 导出——点“导出 M3U”时先拼文本，再弹系统创建文件选择器。
-    var pendingM3uText by remember { mutableStateOf<String?>(null) }
-    val exportM3u = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("audio/x-mpegurl"),
-    ) { uri ->
-        val text = pendingM3uText
-        pendingM3uText = null
-        if (uri == null || text == null) return@rememberLauncherForActivityResult
-        val written = runCatching {
-            context.contentResolver.openOutputStream(uri)?.use {
-                it.write(text.toByteArray(Charsets.UTF_8))
-            }
-            true
-        }.getOrDefault(false)
-        if (!written) {
-            AppToast.show(context, "导出失败：写文件失败", long = true)
-            return@rememberLauncherForActivityResult
-        }
-        AppToast.show(context, "已导出 M3U", long = false)
-        // 存好后再调系统分享（照 FilePreviewScreen.shareFile 的 ACTION_SEND 口径）。
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "audio/x-mpegurl"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        runCatching { context.startActivity(Intent.createChooser(send, "分享 M3U")) }
-    }
-
-    fun doExportM3u() {
-        scope.launch {
-            // 管理页进来时频道流可能还是空的（直播页没刷新过），导出前先刷一次订阅；
-            // 已有频道时不重复刷，直接用当前列表。
-            if (LiveStore.channels.value.isEmpty()) {
-                refreshing = true
-                runCatching { LiveStore.refresh(context) }
-                refreshing = false
-            }
-            val list = LiveStore.channels.value
-            if (list.isEmpty()) {
-                AppToast.show(context, "没有可导出的频道，先添加订阅或手动频道", long = true)
-                return@launch
-            }
-            pendingM3uText = buildM3uExport(list, LiveStore.globalEpgUrl(context))
-            exportM3u.launch("movieshell-live.m3u")
-        }
-    }
-
-    val filePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent(),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            refreshing = true
-            val ok = try {
-                val name = displayNameOf(context.contentResolver, uri)
-                    ?.substringBeforeLast('.')?.ifBlank { null } ?: "本地M3U"
-                val tmp = File(context.cacheDir, "m3u_import_${System.currentTimeMillis()}.m3u")
-                val ins = context.contentResolver.openInputStream(uri)
-                    ?: throw IllegalStateException("无法读取文件")
-                ins.use { input -> tmp.outputStream().use { input.copyTo(it) } }
-                val done = LiveStore.importLocalFile(context, tmp, name)
-                tmp.delete()
-                done
-            } catch (e: Exception) {
-                LogBus.e("Live", "导入本地 M3U 失败: ${e.message}")
-                false
-            }
-            AppToast.show(context, if (ok) "已导入本地 M3U" else "导入失败", long = false)
-            refreshing = false
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TabTopBar(
-                title = "直播订阅管理",
-                onBack = onBack,
-            )
-        },
-    ) { inner ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(inner)
-                .padding(horizontal = 16.dp),
-        ) {
-            item {
-                // v0.174.0：11 条一键导入入口已删（用户要求：本地导入本来就有，
-                // 不需要这个定制入口）。已导入的订阅不动，仍在下面列表里逐条可删。
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    AppButton(
-                        text = "添加订阅",
-                        onClick = { showAddSub = true },
-                        modifier = Modifier.weight(1f),
-                        variant = AppButtonVariant.Primary,
-                    )
-                    // v0.174.0：三按钮统一四字，单行不换行。之前“导入本地 M3U”
-                    // （7 字）和“手动加频道”（5 字）在三分之一宽的按钮里被
-                    // AppButton 默认内边距挤成两行（截图里“手动加频/道”断行），
-                    // “添加订阅”四字本来就是单行；改短后三格齐平，含义不变
-                    // （点开仍是本地 M3U 文件导入 / 手动添加频道弹窗）。
-                    AppButton(
-                        text = "导入本地",
-                        onClick = {
-                            // v1.1.21：无授权时不打开文件选择器，先提示去授权。
-                            if (!StoragePaths.hasAccess(context)) {
-                                AppToast.show(context, "需要先授予存储权限，才能导入本地 M3U", long = true)
-                            } else {
-                                filePicker.launch("*/*")
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        variant = AppButtonVariant.Secondary,
-                    )
-                    AppButton(
-                        text = "手动添加",
-                        onClick = { showAddChannel = true },
-                        modifier = Modifier.weight(1f),
-                        variant = AppButtonVariant.Secondary,
-                    )
-                }
-                // v1.3.33：导出 M3U——订阅解析后频道 + 手动频道，系统创建文件
-                // 选择器保存，再调系统分享。
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    AppButton(
-                        text = "导出 M3U",
-                        onClick = { doExportM3u() },
-                        modifier = Modifier.weight(1f),
-                        variant = AppButtonVariant.Secondary,
-                    )
-                }
-                if (refreshing) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                    ) { CircularProgressIndicator(modifier = Modifier.size(24.dp)) }
-                }
-            }
-            item {
-                // v0.158.0：全局节目单兜底——本源无节目单时用它查正在播/下一档；
-                // 填 XMLTV 地址，.xml.gz 尽力解压，解析失败显示暂无节目数据
-                AppCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            "全局节目单（兜底）",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            "本源无节目单时用它查正在播 / 下一档；不填则不兜底，不内置任何源",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        TechTextField(
-                            value = globalEpgText,
-                            onValueChange = { globalEpgText = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = "https://…/xxx.xml",
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AppButton(
-                                text = "保存",
-                                onClick = {
-                                    LiveStore.setGlobalEpgUrl(context, globalEpgText)
-                                    AppToast.show(context, if (globalEpgText.isBlank()) "已清除全局节目单地址" else "已保存全局节目单地址", long = false)
-                                },
-                                variant = AppButtonVariant.Primary,
-                            )
-                            AppButton(
-                                text = "清除",
-                                onClick = {
-                                    globalEpgText = ""
-                                    LiveStore.setGlobalEpgUrl(context, "")
-                                },
-                                variant = AppButtonVariant.Secondary,
-                            )
-                        }
-                    }
-                }
-            }
-            if (sources.isEmpty()) {
-                item {
-                    EmptyState(
-                        kind = EmptyKind.Empty,
-                        icon = Icons.Filled.Tv,
-                        title = "暂无订阅",
-                        hint = "可添加 M3U 订阅地址（如公开 IPTV 源）",
-                    )
-                }
-            }
-            // v0.133.0：订阅源写侧按 url 查重，但持久化文件读侧无去重，渲染前兜底防同 url 撞 key
-            items(sources.distinctBy { it.url }, key = { it.url }) { s ->
-                // v1.4.12 第 2 步：订阅级节目单地址输入框（点保存即生效，下次切台用它）。
-                var epgText by remember(s.url, s.epg) { mutableStateOf(s.epg) }
-                AppCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                ) {
-                    Column {
-                        Row(
-                            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    s.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                )
-                                Text(
-                                    if (s.type == LiveSource.LOCAL_FILE) "本地文件" else s.url,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            IconButton(onClick = {
-                                LiveStore.removeSource(context, s.url)
-                                // v1.4.2：走 appScope——删源后切走，刷新也要跑完
-                                //（doRefresh 是 LiveScreen 的局部函数，这里直接走 appScope）。
-                                SubSiteStore.appScope.launch { LiveStore.refresh(context) }
-                            }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "删除订阅")
-                            }
-                        }
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                text = "节目单地址",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                TechTextField(
-                                    value = epgText,
-                                    onValueChange = { epgText = it },
-                                    modifier = Modifier.weight(1f),
-                                    placeholder = "https://…/xxx.xml（空则用列表自带的）",
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                TextButton(onClick = {
-                                    LiveStore.setSourceEpg(context, s.url, epgText)
-                                    AppToast.show(
-                                        context,
-                                        if (epgText.isBlank()) "已清除该订阅的节目单地址" else "已保存该订阅的节目单地址",
-                                        long = false,
-                                    )
-                                }) {
-                                    Text("保存")
-                                }
-                            }
-                        }
-                        // v1.4.13 第 3 步：套用其它源下发的模板（点一下写进本订阅的
-                        // EPG 字段，不搞临时覆盖；填完跟“保存”一样，下次切台用它）。
-                        val applyTemplates = remember(sources, channels, globalEpg, s.epg) {
-                            LiveStore.collectEpgTemplates(sources, channels, globalEpg, s.epg)
-                        }
-                        if (applyTemplates.isNotEmpty()) {
-                            Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
-                                Text(
-                                    text = "套用其他源的模板",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                applyTemplates.forEach { t ->
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = "来自${t.fromLabel}：${t.template}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.weight(1f),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        TextButton(onClick = {
-                                            LiveStore.setSourceEpg(context, s.url, t.template)
-                                            AppToast.show(context, "已套用「${t.fromLabel}」的模板", long = false)
-                                        }) { Text("套用") }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            item { Spacer(Modifier.height(16.dp)) }
-        }
-    }
-
-    if (showAddSub) {
-        var name by remember { mutableStateOf("") }
-        var url by remember { mutableStateOf("") }
-        var err by remember { mutableStateOf(false) }
-        TechDialog(
-            onDismissRequest = { showAddSub = false },
-            title = "添加 M3U 订阅",
-            confirmText = "确定",
-            onConfirm = {
-                val u = url.trim()
-                if (!(u.startsWith("http://") || u.startsWith("https://"))) {
-                    err = true
-                    return@TechDialog
-                }
-                if (LiveStore.addSource(context, name.ifBlank { "M3U订阅" }, LiveSource.M3U_URL, u)) {
-                    showAddSub = false
-                    // v1.4.2：走 appScope——加源后切走，刷新也要跑完
-                    //（doRefresh 是 LiveScreen 的局部函数，这里直接走 appScope）。
-                    SubSiteStore.appScope.launch { LiveStore.refresh(context) }
-                } else {
-                    AppToast.show(context, "该订阅已存在", long = false)
-                }
-            },
-        ) {
-                Column {
-                    Text(
-                        text = "名称",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    TechTextField(
-                        value = name, onValueChange = { name = it },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "订阅地址",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    TechTextField(
-                        value = url,
-                        onValueChange = { url = it; err = false },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = "https://…/xxx.m3u",
-                    )
-                    if (err) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "请输入 http(s) 开头的地址",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-        }
-    }
-
-    if (showAddChannel) {
-        var name by remember { mutableStateOf("") }
-        var url by remember { mutableStateOf("") }
-        var logo by remember { mutableStateOf("") }
-        var err by remember { mutableStateOf(false) }
-        TechDialog(
-            onDismissRequest = { showAddChannel = false },
-            title = "手动添加频道",
-            confirmText = "确定",
-            onConfirm = {
-                val u = url.trim()
-                if (!(u.startsWith("http://") || u.startsWith("https://"))) {
-                    err = true
-                    return@TechDialog
-                }
-                if (LiveStore.addManual(context, name.ifBlank { "未命名频道" }, u, logo)) {
-                    showAddChannel = false
-                    // v1.4.2：走 appScope——加台后切走，刷新也要跑完
-                    //（doRefresh 是 LiveScreen 的局部函数，这里直接走 appScope）。
-                    SubSiteStore.appScope.launch { LiveStore.refresh(context) }
-                } else {
-                    AppToast.show(context, "该频道已存在", long = false)
-                }
-            },
-        ) {
-                Column {
-                    Text(
-                        text = "频道名",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    TechTextField(
-                        value = name, onValueChange = { name = it },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "播放地址",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    TechTextField(
-                        value = url,
-                        onValueChange = { url = it; err = false },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = "https://…/xxx.m3u8",
-                    )
-                    if (err) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "请输入 http(s) 开头的地址",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "台标地址（可选）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    TechTextField(
-                        value = logo, onValueChange = { logo = it },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-        }
-    }
-}
