@@ -171,32 +171,6 @@ class LiveThreeColumnTest {
     }
 
     @Test
-    fun liveGroupCounts_matchesDistinctRows() {
-        val cctv1 = LiveChannel(id = "a|u1", name = "CCTV1", url = "u1", sourceKey = "a", group = "央视频道")
-        val cctv2 = LiveChannel(id = "a|u2", name = "CCTV2", url = "u2", sourceKey = "a", group = "央视频道")
-        val hunan = LiveChannel(id = "a|u3", name = "湖南卫视", url = "u3", sourceKey = "a", group = "卫视频道")
-        val movieA1 = LiveChannel(id = "a|u4", name = "电影A", url = "u4", sourceKey = "a", group = "电影")
-        val movieA2 = LiveChannel(id = "b|u5", name = "电影A", url = "u5", sourceKey = "b", group = "电影")
-        val movieB = LiveChannel(id = "a|u6", name = "电影B", url = "u6", sourceKey = "a", group = "电影")
-        val plain = LiveChannel(id = "a|u7", name = "无分组台", url = "u7", sourceKey = "a", group = "")
-        val rows = listOf(cctv1, cctv2, hunan, movieA1, movieA2, movieB, plain)
-        val names = liveGroupNames(rows)
-        assertEquals(listOf("全部频道", "央视频道", "卫视频道", "电影", "未分组"), names)
-        // 每项台数＝其范围内去重后的行数（电影组同名两条变体只算一行）
-        assertEquals(
-            mapOf("全部频道" to 6, "央视频道" to 2, "卫视频道" to 1, "电影" to 2, "未分组" to 1),
-            liveGroupCounts(rows, names),
-        )
-        // 交叉核对：每项台数与中列实际行数一致
-        for (g in names) {
-            assertEquals(
-                distinctChannelsGlobally(liveScopeChannels(rows, g), emptyMap()).size,
-                liveGroupCounts(rows, names)[g],
-            )
-        }
-    }
-
-    @Test
     fun shouldFallbackToAll_rules() {
         val inMovie = LiveChannel(id = "a|u1", name = "电影A", url = "u1", sourceKey = "a", group = "电影")
         val inDrama = LiveChannel(id = "a|u2", name = "剧A", url = "u2", sourceKey = "a", group = "电视剧")
@@ -227,12 +201,9 @@ class LiveThreeColumnTest {
         // 审稿 M1：字面「未分组」与空串分组是同一范围，都进未分组
         assertEquals(listOf(blank, literal), liveScopeChannels(rows, "未分组"))
         assertEquals(listOf(movie), liveScopeChannels(rows, "电影"))
-        // 左列只出现一次未分组项，计数两台
+        // 左列只出现一次未分组项，未分组去重后两台
         assertEquals(listOf("全部频道", "电影", "未分组"), liveGroupNames(rows))
-        assertEquals(
-            mapOf("全部频道" to 3, "电影" to 1, "未分组" to 2),
-            liveGroupCounts(rows, liveGroupNames(rows)),
-        )
+        assertEquals(2, distinctChannelsGlobally(liveScopeChannels(rows, "未分组"), emptyMap()).size)
         // 回落到字面未分组台时不切回全部频道
         assertFalse(shouldFallbackToAll("未分组", literal))
         assertFalse(shouldFallbackToAll("未分组", blank))
@@ -250,6 +221,6 @@ class LiveThreeColumnTest {
         assertEquals(listOf("全部频道", "央视频道"), liveGroupNames(rows))
         // 该频道仍在全部频道里，不丢
         assertEquals(rows, liveScopeChannels(rows, "全部频道"))
-        assertEquals(2, liveGroupCounts(rows, liveGroupNames(rows))["全部频道"])
+        assertEquals(2, distinctChannelsGlobally(liveScopeChannels(rows, "全部频道"), emptyMap()).size)
     }
 }

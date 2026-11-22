@@ -465,12 +465,6 @@ fun LiveScreen(
             displayNameForKey(key, list)
         }
     }
-    // v1.4.17：左列逐项的台数（去重后，与中列行数一致）——按 groupNames
-    // 逐项算，全部频道／我的收藏／各分组／未分组都在内。
-    val tabCounts = remember(filtered, groupNames) {
-        liveGroupCounts(filtered, groupNames)
-    }
-
     // EPG：当前节目 + 下一档（节目信息卡用）；
     // v1.4.11 第 1 步：本源失效自动回落全局（用户自填，不内置源），仍无则 null；
     // 兜底命中时节目卡打“全局”小标。
@@ -718,7 +712,6 @@ fun LiveScreen(
                     refreshing = refreshing,
                     onRefresh = { doRefresh() },
                     listState = groupListState,
-                    counts = tabCounts,
                     modifier = Modifier.width(leftWidth).fillMaxHeight(),
                 )
                 LiveChannelColumn(
@@ -936,17 +929,6 @@ internal fun liveScopeChannels(
     LIVE_TAB_ALL, null -> channels
     LIVE_GROUP_UNGROUPED -> channels.filter { it.group.ifBlank { LIVE_GROUP_UNGROUPED } == LIVE_GROUP_UNGROUPED }
     else -> channels.filter { it.group.ifBlank { LIVE_GROUP_UNGROUPED } == selectedGroup }
-}
-
-/**
- * v1.4.17：左列逐项去重后台数——每项取其范围内的归一化 key 去重数，
- * 与中列行数一致。纯函数，可单测。
- */
-internal fun liveGroupCounts(
-    channels: List<LiveChannel>,
-    groupNames: List<String>,
-): Map<String, Int> = groupNames.associateWith { g ->
-    liveScopeChannels(channels, g).map { normalizeChannelKey(it.name) }.toSet().size
 }
 
 /**
