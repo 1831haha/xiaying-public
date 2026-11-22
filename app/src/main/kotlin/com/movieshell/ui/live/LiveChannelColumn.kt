@@ -75,6 +75,10 @@ internal fun LiveChannelColumn(
     onToggleFavorite: (LiveChannel) -> Unit,
     onLongClickChannel: (LiveChannel) -> Unit,
     listState: LazyListState,
+    // v1.4.16：中列副行“共 N 个源”的计数与主行显示名（短名优先），
+    // 均按归一化 key 索引，由 LiveScreen.kt 算好传进来。
+    sourceCounts: Map<String, Int>,
+    displayNames: Map<String, String>,
     modifier: Modifier = Modifier,
 ) {
     // 分组切换回顶（首帧也回顶，无害）。
@@ -127,7 +131,7 @@ internal fun LiveChannelColumn(
                             }
                         } else {
                             Text(
-                                text = if (query.isNotBlank()) "没有匹配的频道" else "该分组暂无频道",
+                                text = if (query.isNotBlank()) "没有匹配的频道" else "暂无频道",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -143,6 +147,8 @@ internal fun LiveChannelColumn(
                     ChannelRow(
                         index = idx + 1,
                         channel = ch,
+                        displayName = displayNames[normalizeChannelKey(ch.name)] ?: ch.name,
+                        sourceCount = sourceCounts[normalizeChannelKey(ch.name)] ?: 1,
                         isPlaying = isSameChannel(selectedId, ch.id),
                         onClick = { onSelectChannel(ch) },
                         onLongClick = { onLongClickChannel(ch) },
@@ -211,7 +217,7 @@ private fun CurrentChannelBar(
 
 /**
  * v1.4.14 三列频道行（紧凑版，原 ChannelCell 72dp → 48dp）：
- * 序号 + 28dp 台标 + 台名 13sp + 第二行 11sp；正在播行右端 ▶，
+ * 序号 + 28dp 台标 + 台名 13sp + 第二行 11sp（共 N 个源）；正在播行右端 ▶，
  * 右端 + 只收藏不播放（已收藏变实心爱心）。
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -219,6 +225,8 @@ private fun CurrentChannelBar(
 private fun ChannelRow(
     index: Int,
     channel: LiveChannel,
+    displayName: String,
+    sourceCount: Int,
     isPlaying: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -273,7 +281,7 @@ private fun ChannelRow(
                 )
             } else {
                 Text(
-                    text = channel.name.replace(Regex("[\\s\\-]"), "").take(2).ifBlank { "%02d".format(index) },
+                    text = displayName.replace(Regex("[\\s\\-]"), "").take(2).ifBlank { "%02d".format(index) },
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (isPlaying) v.onPrimaryContainer else v.onSurfaceVariant,
@@ -284,7 +292,7 @@ private fun ChannelRow(
         Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = channel.name,
+                text = displayName,
                 fontSize = 13.sp,
                 fontWeight = if (isPlaying) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1,
@@ -293,7 +301,9 @@ private fun ChannelRow(
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = channel.group.ifBlank { "第 $index 台" },
+                    // v1.4.16：副行不再写单个 channel.group——一行横跨多个订阅，
+                    // 写其中一个会骗人；改写该台的源总数。
+                    text = "共 $sourceCount 个源",
                     fontSize = 11.sp,
                     color = v.onSurfaceVariant,
                     maxLines = 1,

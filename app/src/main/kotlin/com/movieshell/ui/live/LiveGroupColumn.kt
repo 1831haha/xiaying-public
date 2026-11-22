@@ -23,7 +23,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,9 +34,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * v1.4.14 三列左列：分组列表（现有 groups 派生不动，我的收藏置顶）+
- * 顶部「更新时间」刷新入口。选中态走主题 token（primaryContainer），
- * 不硬编码参考图浅青。
+ * v1.4.14 三列左列：顶部「更新时间」刷新入口＋分组列表。
+ * 选中态走主题 token（primaryContainer），不硬编码参考图浅青。
+ * v1.4.16：只剩“全部频道／我的收藏”两项，各带去重后台数；自动滚动整段
+ * 删掉——用户自己滑，不需要点击跟随变动。
  */
 @Composable
 internal fun LiveGroupColumn(
@@ -48,14 +48,10 @@ internal fun LiveGroupColumn(
     refreshing: Boolean,
     onRefresh: () -> Unit,
     listState: LazyListState,
+    counts: Map<String, Int> = emptyMap(),
     modifier: Modifier = Modifier,
 ) {
     val v = MaterialTheme.colorScheme
-    // 选中分组变化时左列跟过去（跨台回落改分组时也要跟）。
-    LaunchedEffect(selectedGroup) {
-        val i = groupNames.indexOf(selectedGroup)
-        if (i > 0) listState.scrollToItem(i)
-    }
     LazyColumn(
         state = listState,
         modifier = modifier,
@@ -109,24 +105,34 @@ internal fun LiveGroupColumn(
                     .padding(horizontal = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    if (g == "我的收藏") {
-                        Icon(
-                            Icons.Filled.Star,
-                            contentDescription = null,
-                            tint = if (selected) v.onPrimaryContainer else v.onSurfaceVariant,
-                            modifier = Modifier.size(12.dp),
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        if (g == LIVE_TAB_FAVORITES) {
+                            Icon(
+                                Icons.Filled.Star,
+                                contentDescription = null,
+                                tint = if (selected) v.onPrimaryContainer else v.onSurfaceVariant,
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Spacer(Modifier.width(2.dp))
+                        }
+                        Text(
+                            text = g,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (selected) v.onPrimaryContainer else v.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
                         )
-                        Spacer(Modifier.width(2.dp))
                     }
                     Text(
-                        text = g,
-                        fontSize = 12.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) v.onPrimaryContainer else v.onSurfaceVariant,
+                        text = "${counts[g] ?: 0} 个频道",
+                        fontSize = 9.sp,
+                        color = (if (selected) v.onPrimaryContainer else v.onSurfaceVariant).copy(alpha = 0.7f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.Center,

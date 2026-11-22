@@ -315,8 +315,11 @@ fun LiveScreen(
             return
         }
         liveTriedIds = emptySet()
-        liveSourceByName = liveSourceByName + (ch.name to ch.id)
-        LiveSelection.sourceByName[ch.name] = ch.id
+        // v1.4.16：按台名记源的 key 改归一化 key——“CCTV-1HD”与“CCTV1”是同一台，
+        // 记一次就够；旧持久化键是精确台名，查不到自然失效、回落首条。
+        val nameKey = normalizeChannelKey(ch.name)
+        liveSourceByName = liveSourceByName + (nameKey to ch.id)
+        LiveSelection.sourceByName[nameKey] = ch.id
         LiveSelection.channelId = ch.id
         saveLiveSelection(context)
         selected = ch
@@ -329,7 +332,9 @@ fun LiveScreen(
     fun hideSourceByUrl(url: String) {
         val wasSelected = selected?.url == url
         val fallback = if (wasSelected) {
-            channels.filter { it.name == selected?.name }.firstOrNull { it.url != url }
+            // v1.4.16：同名按归一化 key 认（“CCTV-1HD”与“CCTV1”是同一台）。
+            val nameKey = normalizeChannelKey(selected?.name.orEmpty())
+            channels.filter { normalizeChannelKey(it.name) == nameKey }.firstOrNull { it.url != url }
                 ?: channels.firstOrNull { it.url != url }
         } else {
             null
@@ -345,17 +350,20 @@ fun LiveScreen(
                 // v1.4.9 DeepSeek 审稿：跨台回落时清掉旧台名的源映射，
                 // 否则按台名记源会指到已隐藏的流。
                 val oldName = selected?.name
-                if (oldName != null && fallback.name != oldName) {
-                    liveSourceByName = liveSourceByName - oldName
+                if (oldName != null && normalizeChannelKey(fallback.name) != normalizeChannelKey(oldName)) {
+                    liveSourceByName = liveSourceByName - normalizeChannelKey(oldName) - oldName
+                    LiveSelection.sourceByName.remove(normalizeChannelKey(oldName))
                     LiveSelection.sourceByName.remove(oldName)
                 }
-                liveSourceByName = liveSourceByName + (fallback.name to fallback.id)
-                LiveSelection.sourceByName[fallback.name] = fallback.id
+                val fallbackKey = normalizeChannelKey(fallback.name)
+                liveSourceByName = liveSourceByName + (fallbackKey to fallback.id)
+                LiveSelection.sourceByName[fallbackKey] = fallback.id
                 LiveSelection.channelId = fallback.id
-                // v1.4.9 审稿：跨台回落时中列分组也要跟过去，否则播的台不在列表里。
-                if (fallback.group.isNotBlank() && fallback.group != selectedGroup) {
-                    selectedGroup = fallback.group
-                    LiveSelection.selectedGroup = fallback.group
+                // v1.4.16：左列只剩“全部频道／我的收藏”两项；回落的台不在当前
+                // tab 里（收藏 tab 回落到未收藏的台）才切到全部频道，否则不动。
+                if (selectedGroup == LIVE_TAB_FAVORITES && !fallback.favorite) {
+                    selectedGroup = LIVE_TAB_ALL
+                    LiveSelection.selectedGroup = LIVE_TAB_ALL
                 }
                 saveLiveSelection(context)
                 selected = fallback
@@ -375,8 +383,8 @@ fun LiveScreen(
         if (selected != null) lastPlayStartMs = SystemClock.elapsedRealtime()
     }
 
-    // v1.4.14 三列：搜索只滤当前分组（在中列里对 groupChannelsDistinct 滤），
-    // 不再参与整个频道列表的过滤——左列分组搜的时候不能变。
+    // v1.4.14 三列：搜索只滤当前 tab（在中列里对 groupChannelsDistinct 滤），
+    // 不再参与整个频道列表的过滤——左列 tab 搜的时候不能变。
     val filtered = remember(channels, selectedLiveSource) {
         channels.filter { selectedLiveSource == null || it.sourceKey == selectedLiveSource }
     }
@@ -393,56 +401,79 @@ fun LiveScreen(
             }
         }
     }
-    val groups = remember(filtered) {
-        val sorted = filtered.groupBy { it.group.ifBlank { "未分组" } }.toSortedMap()
-        // v0.153.0：央视频道排最前（原 toSortedMap 按字序把卫视频道排在前面），其余仍按原排序
-        val ordered = linkedMapOf<String, List<LiveChannel>>()
-        sorted.filterKeys { it.contains("央视") }.forEach { (k, v) -> ordered[k] = v }
-        sorted.filterKeys { !it.contains("央视") }.forEach { (k, v) -> ordered[k] = v }
-        // v0.176.0：收藏改成 DS 式一级分组——左列第一项“我的收藏”，
-        // 不再是顶栏星标开关；无收藏时不出现，选中态丢了自动回首组。
-        val withFav = linkedMapOf<String, List<LiveChannel>>()
-        val favs = filtered.filter { it.favorite }
-        if (favs.isNotEmpty()) withFav["我的收藏"] = favs
-        withFav.putAll(ordered)
-        withFav
+    // v1.4.16：左列只剩“全部频道”（默认）＋“我的收藏”两项——group-title
+    // 已被运营商名污染（河南电信·组播／辽宁联通·组播…），当不成栏目分类；
+    // 订阅切换仍走设置页签“按订阅筛选”。无收藏时不出现收藏项。
+    val groupNames = remember(filtered) {
+        val names = mutableListOf(LIVE_TAB_ALL)
+        if (filtered.any { it.favorite }) names += LIVE_TAB_FAVORITES
+        names
     }
-    val groupNames = remember(groups) { groups.keys.toList() }
-    // 分组选中态：保留旧选（若仍在），否则取首个真实分组——
-    // v0.176.0：“我的收藏”只排第一项，不当默认分组（对标 DS 默认选中卫视频道，
-    // 不是我的收藏），只有用户自己点过它才留。
+    // 选中态：保留旧选（若仍在），否则取“全部频道”——旧持久化值是运营商
+    // 分组名，不在新两项里，靠这里重置兜底并写回。
     LaunchedEffect(groupNames) {
         if (selectedGroup !in groupNames) {
-            selectedGroup = groupNames.firstOrNull { it != "我的收藏" }
-                ?: groupNames.firstOrNull()
+            selectedGroup = groupNames.firstOrNull()
             // v1.3.33：分组回落同样写回单例与磁盘，别下次又拿失效分组恢复。
             LiveSelection.selectedGroup = selectedGroup
             saveLiveSelection(context)
         }
     }
-    // v0.80.1：selectedGroup 初始为 null（LaunchedEffect 异步才赋值），TreeMap.get(null)
-    // 会直接 NPE 闪退；首帧先兜底取首个真实分组（同上，不默认我的收藏）
-    val groupChannels = remember(groups, selectedGroup) {
-        val g = selectedGroup
-            ?: groups.keys.firstOrNull { it != "我的收藏" }
-            ?: groups.keys.firstOrNull()
-        if (g == null) emptyList() else groups[g].orEmpty()
+    // v1.4.16：中列先取当前 tab 的范围再全局归一化去重——收藏 tab 只对
+    // 收藏子集去重，代表行必是已收藏的变体；全部频道对 filtered 全量去重。
+    // selectedGroup 首帧为 null 时不等于收藏 tab，走全部频道，不闪退。
+    val tabChannels = remember(filtered, selectedGroup) {
+        if (selectedGroup == LIVE_TAB_FAVORITES) filtered.filter { it.favorite }
+        else filtered
     }
     // v0.159.0：中列按台名去重，每台只显示一条——显示的是该台上次选的源，
-    // 没选过才取第一条；否则中列下面会再出现一遍同名台，点它又回源1
-    val groupChannelsDistinct = remember(groupChannels, liveSourceByName) {
-        distinctChannelsByName(groupChannels, liveSourceByName)
+    // 没选过才取第一条；否则中列下面会再出现一遍同名台，点它又回源1。
+    // v1.4.16：去重改全局归一化——“CCTV-1HD”与“CCTV1”是同一台，
+    // 各订阅的版本全部进右列当源，不再按分组拆行。
+    val groupChannelsDistinct = remember(tabChannels, liveSourceByName) {
+        distinctChannelsGlobally(tabChannels, liveSourceByName)
     }
-    // v1.4.14 三列：搜索只滤当前分组内的台（中列搜索框），左列分组不动。
+    // v1.4.14 三列：搜索只滤当前 tab 内的台（中列搜索框），左列不动；
+    // v1.4.16：同时匹配显示名与归一化 key，搜“CCTV1”能找到“CCTV-1HD”的行。
     val displayChannels = remember(groupChannelsDistinct, query) {
         if (query.isBlank()) groupChannelsDistinct
-        else groupChannelsDistinct.filter { it.name.contains(query, ignoreCase = true) }
+        else {
+            val q = normalizeChannelKey(query)
+            groupChannelsDistinct.filter {
+                it.name.contains(query, ignoreCase = true) ||
+                    normalizeChannelKey(it.name).contains(q)
+            }
+        }
     }
-    // 同名多线路 = 源1..N（右列；v0.160.0 起放播放器下方，1.4.14 回右列）
-    val sources = remember(channels, selected) {
-        val name = selected?.name
-        if (name.isNullOrBlank()) emptyList()
-        else channels.filter { it.name == name }
+    // v1.4.16：右列取数范围与中列副行共用——收藏 tab 下取该频道全部源
+    // （不受订阅筛选影响），其余取 filtered 范围内的同名源。
+    val sourceScope = remember(channels, filtered, selectedGroup) {
+        if (selectedGroup == LIVE_TAB_FAVORITES) channels else filtered
+    }
+    // 同名多线路 = 源1..N（右列；v0.160.0 起放播放器下方，1.4.14 回右列）；
+    // v1.4.16：同名按归一化 key 认。
+    val sources = remember(sourceScope, selected) {
+        val key = selected?.name?.takeIf { it.isNotBlank() }?.let { normalizeChannelKey(it) }
+        if (key == null) emptyList()
+        else sourceScope.filter { normalizeChannelKey(it.name) == key }
+    }
+    // v1.4.16：中列副行“共 N 个源”的计数，与右列取数范围一致。
+    val sourceCounts = remember(sourceScope) {
+        sourceScope.groupBy { normalizeChannelKey(it.name) }.mapValues { it.value.size }
+    }
+    // v1.4.16：中列主行显示名——短名优先（CCTV1 优于 CCTV-1HD），同级取首次出现。
+    val displayNames = remember(sourceScope) {
+        sourceScope.groupBy { normalizeChannelKey(it.name) }.mapValues { (key, list) ->
+            displayNameForKey(key, list)
+        }
+    }
+    // v1.4.16：左列两项的台数（去重后，与中列行数一致）。
+    val tabCounts = remember(filtered) {
+        mapOf(
+            LIVE_TAB_ALL to filtered.map { normalizeChannelKey(it.name) }.toSet().size,
+            LIVE_TAB_FAVORITES to filtered.filter { it.favorite }
+                .map { normalizeChannelKey(it.name) }.toSet().size,
+        )
     }
 
     // EPG：当前节目 + 下一档（节目信息卡用）；
@@ -550,7 +581,7 @@ fun LiveScreen(
                             // v1.4.9：失败过的源先打上本会话标记（源按钮红点）。
                             if (cur != null) liveFailedIds = liveFailedIds + cur.id
                             val same = if (cur == null) emptyList()
-                            else channels.filter { it.name == cur.name }
+                            else channels.filter { normalizeChannelKey(it.name) == normalizeChannelKey(cur.name) }
                             val tried = liveTriedIds + (cur?.id.orEmpty())
                             val next = same.firstOrNull { it.id !in tried }
                             if (next == null) {
@@ -561,22 +592,38 @@ fun LiveScreen(
                                     selectedLiveSource = null
                                     LiveSelection.selectedLiveSource = null
                                 }
+                                // v1.4.16 审稿 M1：Toast 的源号必须按右列实际显示的范围算——
+                                // 右列取 sourceScope（收藏 tab 取全量，其余取 filtered），而
+                                // same 取全量；筛单订阅＋跨订阅失败史＋重设筛选时两者会错一位。
+                                // 清筛选后按现值重算范围（filtered 是旧 remember 值，不能复用）；
+                                // 切换候选仍用全量 same（右列外的源也得能切过去）。
+                                val shownScope = if (selectedGroup == LIVE_TAB_FAVORITES) channels
+                                else channels.filter { selectedLiveSource == null || it.sourceKey == selectedLiveSource }
+                                val shownSame = if (cur == null) emptyList()
+                                else shownScope.filter { normalizeChannelKey(it.name) == normalizeChannelKey(cur.name) }
+                                val nextNum = shownSame.indexOf(next) + 1
                                 // v1.4.9：点名失败的那条（源号 + 来源显示名 + host + 路径尾段），
                                 // 不只说切到了源几，否则删之前认不出哪条死了；
                                 // 同 host 多路径时只看 host 也分不出（1695 与 1697 就是一例）。
                                 val failedDesc = cur?.let {
                                     val tail = it.url.substringAfterLast('/').substringBefore('?')
                                         .takeIf { s -> s.isNotBlank() }?.let { t -> "…/$t" }
+                                    // 失败源号：右列看得见就按右列编；看不见（极少）回落全量，
+                                    // indexOfFirst 找不到是 -1，直接 +1 会报“源0”（1.4.9 R1 同类）。
+                                    val shownIdx = shownSame.indexOfFirst { c -> c.id == it.id }
+                                    val failedNum = if (shownIdx >= 0) shownIdx + 1
+                                    else same.indexOfFirst { c -> c.id == it.id } + 1
                                     listOfNotNull(
-                                        "源${same.indexOfFirst { c -> c.id == it.id } + 1}",
+                                        "源$failedNum",
                                         liveSourceLabel(it.sourceKey).takeIf { s -> s.isNotBlank() },
                                         LiveStore.hostOfUrl(it.url).takeIf { s -> s.isNotBlank() },
                                         tail,
                                     ).joinToString(" · ")
                                 }.orEmpty()
-                                AppToast.show(context, "播放失败（${failedDesc}），已自动切到源${same.indexOf(next) + 1}", long = false)
-                                liveSourceByName = liveSourceByName + (next.name to next.id)
-                                LiveSelection.sourceByName[next.name] = next.id
+                                AppToast.show(context, "播放失败（${failedDesc}），已自动切到源$nextNum", long = false)
+                                val nextKey = normalizeChannelKey(next.name)
+                                liveSourceByName = liveSourceByName + (nextKey to next.id)
+                                LiveSelection.sourceByName[nextKey] = next.id
                                 LiveSelection.channelId = next.id
                                 saveLiveSelection(context)
                                 selected = next
@@ -676,6 +723,7 @@ fun LiveScreen(
                     refreshing = refreshing,
                     onRefresh = { doRefresh() },
                     listState = groupListState,
+                    counts = tabCounts,
                     modifier = Modifier.width(leftWidth).fillMaxHeight(),
                 )
                 LiveChannelColumn(
@@ -697,6 +745,8 @@ fun LiveScreen(
                     onToggleFavorite = { LiveStore.toggleFavorite(context, it.id) },
                     onLongClickChannel = { detailChannel = it },
                     listState = channelListState,
+                    sourceCounts = sourceCounts,
+                    displayNames = displayNames,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
                 LiveSourceColumn(
@@ -836,15 +886,21 @@ internal fun isSameChannel(selectedId: String?, channelId: String): Boolean =
 internal fun nowTitleForChannel(selectedId: String?, channelId: String, epgTitle: String?): String? =
     if (isSameChannel(selectedId, channelId)) epgTitle else null
 
+/** v1.4.16：左列只剩的两项 tab 名（替代运营商分组名）。 */
+internal const val LIVE_TAB_ALL = "全部频道"
+internal const val LIVE_TAB_FAVORITES = "我的收藏"
+
 /**
  * v1.4.14 三列：中列按台名去重，每台只显示一条——显示的是该台上次选的源，
  * 没选过才取第一条；记的源 id 已失效也回落第一条。纯函数，可单测。
+ * v1.4.16：去重改全局归一化——按 normalizeChannelKey 分组，不再按精确台名；
+ * 顺序保持 key 首次出现顺序。
  */
-internal fun distinctChannelsByName(
+internal fun distinctChannelsGlobally(
     channels: List<LiveChannel>,
     sourceByName: Map<String, String>,
-): List<LiveChannel> = channels.groupBy { it.name }.values.map { list ->
-    sourceByName[list.first().name]?.let { id ->
+): List<LiveChannel> = channels.groupBy { normalizeChannelKey(it.name) }.values.map { list ->
+    sourceByName[normalizeChannelKey(list.first().name)]?.let { id ->
         list.firstOrNull { it.id == id }
     } ?: list.first()
 }

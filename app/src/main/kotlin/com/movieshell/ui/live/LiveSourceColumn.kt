@@ -2,6 +2,7 @@ package com.movieshell.ui.live
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -45,6 +46,7 @@ internal fun shouldScrollToIndex(firstVisible: Int, lastVisible: Int, target: In
  * v1.4.14 三列右列：只列当前台的同名源（源1/源2…），不是全部订阅源。
  * 点源直接切；失败源打红点；长按弹源详情；隐藏流不显示在右列。
  * 自动切源时高亮跟随实际播放源（读 selectedId 即可）。
+ * v1.4.16：行改两行——主行订阅名、副行“源 N”。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -102,14 +104,27 @@ internal fun LiveSourceColumn(
                         .padding(horizontal = 4.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        text = sourceLabel(idx),
-                        fontSize = 12.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) v.onPrimaryContainer else v.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // v1.4.16：行改两行——主行订阅名（同名源多了只看“源 N”分不清），
+                    // 副行“源 N”；源 N 编号不动（失败 Toast、红点、长按详情都认它）。
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = liveSourceLabel(ch.sourceKey),
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (selected) v.onPrimaryContainer else v.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(
+                            text = sourceLabel(idx),
+                            fontSize = 9.sp,
+                            color = (if (selected) v.onPrimaryContainer else v.onSurfaceVariant).copy(alpha = 0.7f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     if (ch.id in failedIds) {
                         Box(
                             modifier = Modifier
