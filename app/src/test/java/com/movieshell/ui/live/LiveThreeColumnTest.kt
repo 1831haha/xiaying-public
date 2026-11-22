@@ -118,4 +118,103 @@ class LiveThreeColumnTest {
             distinctChannelsGlobally(listOf(b, a1, a2), emptyMap()),
         )
     }
+
+    @Test
+    fun liveGroupNames_order() {
+        val cctv1 = LiveChannel(id = "a|u1", name = "CCTV1", url = "u1", sourceKey = "a", group = "央视频道", favorite = true)
+        val cctv2 = LiveChannel(id = "a|u2", name = "CCTV2", url = "u2", sourceKey = "a", group = "央视频道")
+        val hunan = LiveChannel(id = "a|u3", name = "湖南卫视", url = "u3", sourceKey = "a", group = "卫视频道")
+        val movieA = LiveChannel(id = "a|u4", name = "电影A", url = "u4", sourceKey = "a", group = "电影")
+        val movieB = LiveChannel(id = "a|u5", name = "电影B", url = "u5", sourceKey = "a", group = "电影")
+        val plain = LiveChannel(id = "a|u6", name = "无分组台", url = "u6", sourceKey = "a", group = "")
+        // 全部频道 → 我的收藏（有收藏）→ 真实分组按首次出现顺序 → 未分组最后
+        assertEquals(
+            listOf("全部频道", "我的收藏", "央视频道", "卫视频道", "电影", "未分组"),
+            liveGroupNames(listOf(cctv1, cctv2, hunan, movieA, movieB, plain)),
+        )
+    }
+
+    @Test
+    fun liveGroupNames_noFavoritesNoUngrouped() {
+        val movieA = LiveChannel(id = "a|u1", name = "电影A", url = "u1", sourceKey = "a", group = "电影")
+        val cctv1 = LiveChannel(id = "a|u2", name = "CCTV1", url = "u2", sourceKey = "a", group = "央视频道")
+        // 无收藏 → 无我的收藏项；无无分组频道 → 无未分组项；顺序按首次出现（电影在前），不排序
+        assertEquals(
+            listOf("全部频道", "电影", "央视频道"),
+            liveGroupNames(listOf(movieA, cctv1)),
+        )
+        assertEquals(listOf("全部频道"), liveGroupNames(emptyList()))
+    }
+
+    @Test
+    fun liveScopeChannels_groupRange() {
+        val cctv1 = LiveChannel(id = "a|u1", name = "CCTV1", url = "u1", sourceKey = "a", group = "央视频道")
+        val cctv2 = LiveChannel(id = "a|u2", name = "CCTV2", url = "u2", sourceKey = "a", group = "央视频道")
+        val hunan = LiveChannel(id = "a|u3", name = "湖南卫视", url = "u3", sourceKey = "a", group = "卫视频道")
+        val movieA1 = LiveChannel(id = "a|u4", name = "电影A", url = "u4", sourceKey = "a", group = "电影")
+        val movieA2 = LiveChannel(id = "b|u5", name = "电影A", url = "u5", sourceKey = "b", group = "电影")
+        val movieB = LiveChannel(id = "a|u6", name = "电影B", url = "u6", sourceKey = "a", group = "电影")
+        val plain = LiveChannel(id = "a|u7", name = "无分组台", url = "u7", sourceKey = "a", group = "")
+        val rows = listOf(cctv1, cctv2, hunan, movieA1, movieA2, movieB, plain)
+        // 电影分组只含该组三条（含同名两条变体），去重后剩两行
+        assertEquals(listOf(movieA1, movieA2, movieB), liveScopeChannels(rows, "电影"))
+        assertEquals(
+            listOf(movieA1, movieB),
+            distinctChannelsGlobally(liveScopeChannels(rows, "电影"), emptyMap()),
+        )
+        // 全部频道／null 取全量；未分组只取无分组频道；不存在的分组取空
+        assertEquals(rows, liveScopeChannels(rows, "全部频道"))
+        assertEquals(rows, liveScopeChannels(rows, null))
+        assertEquals(listOf(plain), liveScopeChannels(rows, "未分组"))
+        assertEquals(listOf(cctv1, cctv2), liveScopeChannels(rows, "央视频道"))
+        assertEquals(emptyList<LiveChannel>(), liveScopeChannels(rows, "不存在的分组"))
+    }
+
+    @Test
+    fun liveGroupCounts_matchesDistinctRows() {
+        val cctv1 = LiveChannel(id = "a|u1", name = "CCTV1", url = "u1", sourceKey = "a", group = "央视频道")
+        val cctv2 = LiveChannel(id = "a|u2", name = "CCTV2", url = "u2", sourceKey = "a", group = "央视频道")
+        val hunan = LiveChannel(id = "a|u3", name = "湖南卫视", url = "u3", sourceKey = "a", group = "卫视频道")
+        val movieA1 = LiveChannel(id = "a|u4", name = "电影A", url = "u4", sourceKey = "a", group = "电影")
+        val movieA2 = LiveChannel(id = "b|u5", name = "电影A", url = "u5", sourceKey = "b", group = "电影")
+        val movieB = LiveChannel(id = "a|u6", name = "电影B", url = "u6", sourceKey = "a", group = "电影")
+        val plain = LiveChannel(id = "a|u7", name = "无分组台", url = "u7", sourceKey = "a", group = "")
+        val rows = listOf(cctv1, cctv2, hunan, movieA1, movieA2, movieB, plain)
+        val names = liveGroupNames(rows)
+        assertEquals(listOf("全部频道", "央视频道", "卫视频道", "电影", "未分组"), names)
+        // 每项台数＝其范围内去重后的行数（电影组同名两条变体只算一行）
+        assertEquals(
+            mapOf("全部频道" to 6, "央视频道" to 2, "卫视频道" to 1, "电影" to 2, "未分组" to 1),
+            liveGroupCounts(rows, names),
+        )
+        // 交叉核对：每项台数与中列实际行数一致
+        for (g in names) {
+            assertEquals(
+                distinctChannelsGlobally(liveScopeChannels(rows, g), emptyMap()).size,
+                liveGroupCounts(rows, names)[g],
+            )
+        }
+    }
+
+    @Test
+    fun shouldFallbackToAll_rules() {
+        val inMovie = LiveChannel(id = "a|u1", name = "电影A", url = "u1", sourceKey = "a", group = "电影")
+        val inDrama = LiveChannel(id = "a|u2", name = "剧A", url = "u2", sourceKey = "a", group = "电视剧")
+        val noGroup = LiveChannel(id = "a|u3", name = "无分组台", url = "u3", sourceKey = "a", group = "")
+        val fav = LiveChannel(id = "a|u4", name = "CCTV1", url = "u4", sourceKey = "a", group = "央视频道", favorite = true)
+        val notFav = LiveChannel(id = "a|u5", name = "CCTV2", url = "u5", sourceKey = "a", group = "央视频道", favorite = false)
+        // 在电影分组：组内不动，组外／无分组切到全部频道
+        assertFalse(shouldFallbackToAll("电影", inMovie))
+        assertTrue(shouldFallbackToAll("电影", inDrama))
+        assertTrue(shouldFallbackToAll("电影", noGroup))
+        // 在未分组：无分组不动，分组切到全部频道
+        assertFalse(shouldFallbackToAll("未分组", noGroup))
+        assertTrue(shouldFallbackToAll("未分组", inMovie))
+        // 收藏 tab 旧行为不变：回落到已收藏不动，回落到未收藏切到全部频道
+        assertFalse(shouldFallbackToAll("我的收藏", fav))
+        assertTrue(shouldFallbackToAll("我的收藏", notFav))
+        // 全部频道／首帧 null：永不切
+        assertFalse(shouldFallbackToAll("全部频道", inDrama))
+        assertFalse(shouldFallbackToAll(null, inDrama))
+    }
 }

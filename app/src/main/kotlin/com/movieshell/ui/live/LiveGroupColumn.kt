@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.sp
  * 选中态走主题 token（primaryContainer），不硬编码参考图浅青。
  * v1.4.16：只剩“全部频道／我的收藏”两项，各带去重后台数；自动滚动整段
  * 删掉——用户自己滑，不需要点击跟随变动。
+ * v1.4.17：恢复分组——左列重回 全部频道／我的收藏／真实分组（按 M3U
+ * group-title 首次出现顺序）／未分组，各带去重后台数；自动滚动继续没有。
  */
 @Composable
 internal fun LiveGroupColumn(

@@ -359,9 +359,10 @@ fun LiveScreen(
                 liveSourceByName = liveSourceByName + (fallbackKey to fallback.id)
                 LiveSelection.sourceByName[fallbackKey] = fallback.id
                 LiveSelection.channelId = fallback.id
-                // v1.4.16：左列只剩“全部频道／我的收藏”两项；回落的台不在当前
-                // tab 里（收藏 tab 回落到未收藏的台）才切到全部频道，否则不动。
-                if (selectedGroup == LIVE_TAB_FAVORITES && !fallback.favorite) {
+                // v1.4.17：回落规则推广为通用规则——回落的台不在当前左列范围
+                // （tab／分组）里才切到全部频道，否则不动；收藏 tab 旧行为
+                // （回落到未收藏的台才切）是这条规则的特例。
+                if (shouldFallbackToAll(selectedGroup, fallback)) {
                     selectedGroup = LIVE_TAB_ALL
                     LiveSelection.selectedGroup = LIVE_TAB_ALL
                 }
@@ -401,16 +402,13 @@ fun LiveScreen(
             }
         }
     }
-    // v1.4.16：左列只剩“全部频道”（默认）＋“我的收藏”两项——group-title
-    // 已被运营商名污染（河南电信·组播／辽宁联通·组播…），当不成栏目分类；
-    // 订阅切换仍走设置页签“按订阅筛选”。无收藏时不出现收藏项。
-    val groupNames = remember(filtered) {
-        val names = mutableListOf(LIVE_TAB_ALL)
-        if (filtered.any { it.favorite }) names += LIVE_TAB_FAVORITES
-        names
-    }
-    // 选中态：保留旧选（若仍在），否则取“全部频道”——旧持久化值是运营商
-    // 分组名，不在新两项里，靠这里重置兜底并写回。
+    // v1.4.17：左列恢复分组——全部频道（默认）／我的收藏（仅有收藏时）／
+    // 真实分组按 group-title 首次出现顺序（M3U 自身顺序，与 DS 左列一致）／
+    // 未分组（仅有无分组频道时，排最后）。运营商名分组不再过滤、原样呈现
+    // （CCSH 的省名也是合法分类，与运营商名分不开，硬滤会误伤）。
+    val groupNames = remember(filtered) { liveGroupNames(filtered) }
+    // 选中态：保留旧选（若仍在），否则取首项——1.4.17 恢复分组后，旧持久化
+    // 的运营商分组名若仍在列表里即恢复选中；不在时靠这里重置兜底并写回。
     LaunchedEffect(groupNames) {
         if (selectedGroup !in groupNames) {
             selectedGroup = groupNames.firstOrNull()
@@ -419,19 +417,19 @@ fun LiveScreen(
             saveLiveSelection(context)
         }
     }
-    // v1.4.16：中列先取当前 tab 的范围再全局归一化去重——收藏 tab 只对
-    // 收藏子集去重，代表行必是已收藏的变体；全部频道对 filtered 全量去重。
-    // selectedGroup 首帧为 null 时不等于收藏 tab，走全部频道，不闪退。
-    val tabChannels = remember(filtered, selectedGroup) {
-        if (selectedGroup == LIVE_TAB_FAVORITES) filtered.filter { it.favorite }
-        else filtered
+    // v1.4.17：tabChannels 改名 scopeChannels——中列先取当前左列选中项
+    // 的范围再全局归一化去重；收藏 tab 只对收藏子集去重，代表行必是已收
+    // 藏的变体；分组只对该组去重；全部频道对 filtered 全量去重。
+    // selectedGroup 首帧为 null 时走全部频道，不闪退。
+    val scopeChannels = remember(filtered, selectedGroup) {
+        liveScopeChannels(filtered, selectedGroup)
     }
     // v0.159.0：中列按台名去重，每台只显示一条——显示的是该台上次选的源，
     // 没选过才取第一条；否则中列下面会再出现一遍同名台，点它又回源1。
     // v1.4.16：去重改全局归一化——“CCTV-1HD”与“CCTV1”是同一台，
     // 各订阅的版本全部进右列当源，不再按分组拆行。
-    val groupChannelsDistinct = remember(tabChannels, liveSourceByName) {
-        distinctChannelsGlobally(tabChannels, liveSourceByName)
+    val groupChannelsDistinct = remember(scopeChannels, liveSourceByName) {
+        distinctChannelsGlobally(scopeChannels, liveSourceByName)
     }
     // v1.4.14 三列：搜索只滤当前 tab 内的台（中列搜索框），左列不动；
     // v1.4.16：同时匹配显示名与归一化 key，搜“CCTV1”能找到“CCTV-1HD”的行。
@@ -467,13 +465,10 @@ fun LiveScreen(
             displayNameForKey(key, list)
         }
     }
-    // v1.4.16：左列两项的台数（去重后，与中列行数一致）。
-    val tabCounts = remember(filtered) {
-        mapOf(
-            LIVE_TAB_ALL to filtered.map { normalizeChannelKey(it.name) }.toSet().size,
-            LIVE_TAB_FAVORITES to filtered.filter { it.favorite }
-                .map { normalizeChannelKey(it.name) }.toSet().size,
-        )
+    // v1.4.17：左列逐项的台数（去重后，与中列行数一致）——按 groupNames
+    // 逐项算，全部频道／我的收藏／各分组／未分组都在内。
+    val tabCounts = remember(filtered, groupNames) {
+        liveGroupCounts(filtered, groupNames)
     }
 
     // EPG：当前节目 + 下一档（节目信息卡用）；
@@ -886,9 +881,12 @@ internal fun isSameChannel(selectedId: String?, channelId: String): Boolean =
 internal fun nowTitleForChannel(selectedId: String?, channelId: String, epgTitle: String?): String? =
     if (isSameChannel(selectedId, channelId)) epgTitle else null
 
-/** v1.4.16：左列只剩的两项 tab 名（替代运营商分组名）。 */
+/** v1.4.16：左列首两项 tab 名；v1.4.17：其后接 M3U group-title 真实分组。 */
 internal const val LIVE_TAB_ALL = "全部频道"
 internal const val LIVE_TAB_FAVORITES = "我的收藏"
+
+/** v1.4.17：恢复分组后左列多一项“未分组”（group-title 为空串的频道归到这里）。 */
+internal const val LIVE_GROUP_UNGROUPED = "未分组"
 
 /**
  * v1.4.14 三列：中列按台名去重，每台只显示一条——显示的是该台上次选的源，
@@ -903,5 +901,60 @@ internal fun distinctChannelsGlobally(
     sourceByName[normalizeChannelKey(list.first().name)]?.let { id ->
         list.firstOrNull { it.id == id }
     } ?: list.first()
+}
+
+/**
+ * v1.4.17：左列顺序——全部频道（默认首选）／我的收藏（仅有收藏时）／
+ * 真实分组按 group-title 在 filtered 里首次出现的顺序（即 M3U 自身顺序，
+ * 与 DS 左列一致）／未分组（仅有无分组频道时，排最后）。不排序、不把
+ * “央视”特殊置顶。纯函数，可单测。
+ */
+internal fun liveGroupNames(channels: List<LiveChannel>): List<String> {
+    val names = mutableListOf(LIVE_TAB_ALL)
+    if (channels.any { it.favorite }) names += LIVE_TAB_FAVORITES
+    val groups = channels.map { it.group.ifBlank { LIVE_GROUP_UNGROUPED } }.distinct()
+    names += groups.filter { it != LIVE_GROUP_UNGROUPED }
+    if (LIVE_GROUP_UNGROUPED in groups) names += LIVE_GROUP_UNGROUPED
+    return names
+}
+
+/**
+ * v1.4.17：中列范围按当前左列选中项取——全部频道取全量、我的收藏取收藏
+ * 子集、真实分组取该组、未分组取无分组频道；selectedGroup 首帧为 null
+ * 时走全部频道，不闪退。纯函数，可单测。
+ */
+internal fun liveScopeChannels(
+    channels: List<LiveChannel>,
+    selectedGroup: String?,
+): List<LiveChannel> = when (selectedGroup) {
+    LIVE_TAB_FAVORITES -> channels.filter { it.favorite }
+    LIVE_TAB_ALL, null -> channels
+    LIVE_GROUP_UNGROUPED -> channels.filter { it.group.isBlank() }
+    else -> channels.filter { it.group.ifBlank { LIVE_GROUP_UNGROUPED } == selectedGroup }
+}
+
+/**
+ * v1.4.17：左列逐项去重后台数——每项取其范围内的归一化 key 去重数，
+ * 与中列行数一致。纯函数，可单测。
+ */
+internal fun liveGroupCounts(
+    channels: List<LiveChannel>,
+    groupNames: List<String>,
+): Map<String, Int> = groupNames.associateWith { g ->
+    liveScopeChannels(channels, g).map { normalizeChannelKey(it.name) }.toSet().size
+}
+
+/**
+ * v1.4.17：hideSourceByUrl 回落规则——回落的台不在当前左列范围里才切
+ * 到全部频道，否则不动；收藏 tab 旧行为（回落到未收藏的台才切）是这条
+ * 规则的特例。纯函数，可单测。
+ */
+internal fun shouldFallbackToAll(selectedGroup: String?, fallback: LiveChannel): Boolean {
+    if (selectedGroup == null || selectedGroup == LIVE_TAB_ALL) return false
+    return when (selectedGroup) {
+        LIVE_TAB_FAVORITES -> !fallback.favorite
+        LIVE_GROUP_UNGROUPED -> fallback.group.isNotBlank()
+        else -> fallback.group.ifBlank { LIVE_GROUP_UNGROUPED } != selectedGroup
+    }
 }
 
