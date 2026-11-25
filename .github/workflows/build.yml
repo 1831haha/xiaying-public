@@ -113,3 +113,5 @@ jobs:
           name: v${{ steps.release.outputs.version }}
           prerelease: true
           files: release-files/*
+
+# 2026-11-25：公开库首推后 Actions 未注册此工作流，改一行注释强制重新扫描（无行为变化）。
