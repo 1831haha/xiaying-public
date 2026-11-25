@@ -77,7 +77,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -88,7 +87,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -101,12 +99,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import androidx.core.graphics.drawable.toBitmap
-import coil.compose.AsyncImage
-import coil.compose.AsyncImagePainter
-import coil.compose.rememberAsyncImagePainter
-import coil.request.ImageRequest
-import coil.size.Size
 import com.movieshell.core.log.LogBus
 import com.movieshell.data.source.MusicApi
 import com.movieshell.data.store.MusicSource
@@ -128,9 +120,7 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ModalBottomSheet
 import com.movieshell.ui.components.sheetListScrollGuard
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * v0.83.0：全屏播放页——大封面 / 歌词滚动跟随 / 进度条拖动 / 播放模式。
@@ -172,39 +162,10 @@ fun MusicPlayerScreen(
     val shownArt = artUrl.ifBlank {
         track?.let { matchedArtMap[it.id] }.orEmpty()
     }
-    // v1.3.3：系统栏跟随播放页整体色——另起一份画笔取封面平均色压暗发布。
-    // 1.3.2 的教训：coil 的 AsyncImagePainter 没画出来时一直等画布尺寸
-    // （drawSize 恒为 0），state 永远到不了 Success，取色等于没跑，
-    // 状态栏永远是氛围底色。改走带明确尺寸的 ImageRequest，不等画布。
-    val ctx = LocalContext.current
-    val artRequest = remember(shownArt) {
-        ImageRequest.Builder(ctx)
-            .data(shownArt)
-            .size(Size.ORIGINAL)
-            // v1.3.4：这份画笔只取色、从不画出来，硬件位图读像素会闪退，
-            // 直接让 Coil 解成软件位图（averageColor 里另有 copy 兜底）。
-            .allowHardware(false)
-            .build()
-    }
-    val artPainter = rememberAsyncImagePainter(model = artRequest)
-    val artBitmap = (artPainter.state as? AsyncImagePainter.State.Success)
-        ?.result?.drawable?.toBitmap()
-    // v1.4.15：整页一个色——系统栏盖与页面相同的均匀黑遮罩，不再是
-    // 平均色 × 0.62（那是顶 38% 黑渐变的旧算法）；布局切换也重算栏色。
-    val brandTop = LocalBrandGradient.current.firstOrNull()
-    val immersiveLayout = playerLayout == MusicPlayerLayout.IMMERSIVE
-    LaunchedEffect(artBitmap, shownArt, immersiveLayout) {
-        val color = when {
-            artBitmap != null -> withContext(Dispatchers.Default) {
-                PlayerSystemBars.uniformBarColor(
-                    PlayerSystemBars.averageColor(artBitmap),
-                    immersiveLayout,
-                )
-            }
-            shownArt.isBlank() -> PlayerSystemBars.noArtBarColor(brandTop, immersiveLayout)
-            else -> PlayerSystemBars.ATMOSPHERE_BASE
-        }
-        PlayerSystemBars.publish(color)
+    // v1.4.19：全屏一个色——系统栏直接发布页面纯色底，不再取封面平均色
+    // （取色画笔与平均色整条链随模糊铺底一起删掉，见 PlayerSystemBars）。
+    LaunchedEffect(Unit) {
+        PlayerSystemBars.publish(PlayerSystemBars.ATMOSPHERE_BASE)
     }
     DisposableEffect(Unit) { onDispose { PlayerSystemBars.clear() } }
 
@@ -301,10 +262,7 @@ fun MusicPlayerScreen(
     BackHandler(enabled = showLyricColors) { showLyricColors = false }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        PlayerAtmosphere(
-            artUrl = shownArt,
-            immersive = playerLayout == MusicPlayerLayout.IMMERSIVE,
-        )
+        PlayerAtmosphere()
         Scaffold(
             containerColor = Color.Transparent,
             topBar = {
@@ -1069,58 +1027,19 @@ private fun PlayingBars(playing: Boolean, reducedMotion: Boolean) {
 }
 
 /**
- * v1.4.15：整页一个色（C 改良版）——模糊封面铺满 + 整页均匀黑遮罩
- * （普通 0.60，沉浸 0.55），去掉顶 38% 底 88% 的黑渐变；两团漂移
- * 光斑与沉浸炫彩极光一并去掉，光斑/极光是在造第二个色。
- * 旧参数 reducedMotion/playing 随光斑/极光一起去掉（氛围层已无动画）。
+ * v1.4.19：全屏一个色——封面模糊铺底整块拿掉。1.4.15 的均匀黑遮罩只压掉
+ * 六成，封面自己上下明暗/色相差得太多（这版牡丹亭：上半是浅色天空、下半
+ * 是大朵粉牡丹），剩下的四成照样看得出上下不同色；无封面时的品牌渐变
+ * 同样是竖着拉开的。页面与系统栏从此只剩这一个纯色底。中间那张方形封面
+ * 是内容区的图，不受影响。
  */
 @Composable
-private fun PlayerAtmosphere(
-    artUrl: String,
-    // v0.294.12：沉浸布局放大模糊封面、遮罩更淡，前景内容叠在氛围上
-    immersive: Boolean = false,
-) {
+private fun PlayerAtmosphere() {
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF07070D)),
-    ) {
-        if (artUrl.isNotBlank()) {
-            AsyncImage(
-                model = artUrl,
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        val s = if (immersive) 1.45f else 1.25f
-                        scaleX = s
-                        scaleY = s
-                    }
-                    .blur(if (immersive) 64.dp else 48.dp),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            LocalBrandGradient.current.map { it.copy(alpha = 0.32f) },
-                        ),
-                    ),
-            )
-        }
-        // v1.4.15：均匀黑遮罩——整页同一透明度，上下不再拉开。
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Color.Black.copy(
-                        alpha = PlayerSystemBars.uniformScrimAlpha(immersive),
-                    ),
-                ),
-        )
-    }
+    )
 }
 
 /**
