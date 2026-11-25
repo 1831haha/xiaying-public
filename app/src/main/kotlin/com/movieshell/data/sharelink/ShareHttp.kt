@@ -1,6 +1,7 @@
 package com.movieshell.data.sharelink
 
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.net.CleartextGate
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -33,6 +34,8 @@ object ShareHttp {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
+        // v1.4.23：明文 HTTP 授权网关（服务端返回的播放/m3u8 直链可为 http）。
+        .addNetworkInterceptor(CleartextGate.networkInterceptor)
         .build()
 
     fun postJson(

@@ -18,11 +18,32 @@ object TorrentCache {
     fun fetch(hashHex: String): ByteArray? {
         for (u in urls(hashHex)) {
             val b = runCatching {
-                val c = URL(u).openConnection() as HttpURLConnection
-                c.connectTimeout = 4000; c.readTimeout = 5000
-                c.instanceFollowRedirects = true
-                c.setRequestProperty("User-Agent", "Mozilla/5.0")
-                try { if (c.responseCode == 200) c.inputStream.use { it.readBytes() } else null } finally { c.disconnect() }
+                // v1.4.23 S3：不自动跟随重定向——手动跟随并校验 scheme，https 起始
+                // 跳到 http 即拒绝（防降级明文）；相对 Location 用当前 URL 解析。
+                var current = URL(u)
+                var body: ByteArray? = null
+                var redirects = 0
+                while (body == null && redirects <= 5) {
+                    val c = current.openConnection() as HttpURLConnection
+                    c.connectTimeout = 4000; c.readTimeout = 5000
+                    c.instanceFollowRedirects = false
+                    c.setRequestProperty("User-Agent", "Mozilla/5.0")
+                    try {
+                        val code = c.responseCode
+                        when {
+                            code == 200 -> body = c.inputStream.use { it.readBytes() }
+                            (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) && redirects < 5 -> {
+                                val loc = c.getHeaderField("Location") ?: return@runCatching null
+                                val next = URL(current, loc)
+                                if (current.protocol == "https" && next.protocol == "http") return@runCatching null
+                                current = next
+                                redirects++
+                            }
+                            else -> return@runCatching null
+                        }
+                    } finally { c.disconnect() }
+                }
+                body
             }.getOrNull()
             if (MagnetStreamLogic.looksLikeTorrent(b)) {
                 // 校验 infohash 一致，防缓存给错种子

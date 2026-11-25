@@ -13,6 +13,7 @@ import com.movieshell.data.store.PluginStore
 import com.movieshell.data.store.PluginStore.InstalledPlugin
 import com.movieshell.data.source.CmsApi
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.net.CleartextGate
 import com.movieshell.data.source_mgr.ClashProxy
 import com.movieshell.data.source_mgr.PhpSourceManager
 import com.movieshell.data.source_mgr.ServicePluginManager
@@ -120,6 +121,8 @@ object PluginMarket {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .callTimeout(120, TimeUnit.SECONDS)
+        // v1.4.23：明文 HTTP 授权网关（包下载走 plugin.url，用户可控地址）。
+        .addNetworkInterceptor(CleartextGate.networkInterceptor)
         .build()
 
     /**

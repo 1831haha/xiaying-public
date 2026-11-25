@@ -4,6 +4,8 @@ import android.app.Application
 import coil.Coil
 import coil.ImageLoader
 import com.movieshell.core.js.LegadoJsEngine
+import com.movieshell.core.net.CleartextAuth
+import com.movieshell.core.net.CleartextGate
 import com.movieshell.core.net.HttpClient
 import com.movieshell.core.net.ProxyRouting
 import com.movieshell.core.util.ProcessExitLog
@@ -49,6 +51,10 @@ class XiaYingApp : Application() {
         // v1.4.8 A4：DoH 启动快照——放最前：sharedClient 是 lazy 单例，首次建 client 前
         // 必须注入，否则开关读不到；开关改完重启 App 才重建 client 生效。
         HttpClient.initDoh(DohSettings.snapshot(this))
+        // v1.4.23：明文 HTTP 授权网关存储初始化（读快照＋首次祖父迁移）——
+        // 放在 initDoh 之后、Coil.setImageLoader 之前；:magnet 子进程在上面
+        // 已 early-return，网关只在主进程生效，符合设计。
+        CleartextAuth.init(this)
         // v0.294.29：上次进程（含 :magnet）非正常退出原因写进运行日志（原生崩溃 Java 抓不到）
         ProcessExitLog.logAsync(this)
         // v0.294.28：启动只清磁力缓存目录，绝不加载 libtorrent（避免 JNI 启动闪退）
@@ -59,7 +65,8 @@ class XiaYingApp : Application() {
             ImageLoader.Builder(this)
                 .components { add(ProxyImageFetcher.Factory()) }
                 // v1.3.26：封面图也走代理路由（只代理已开代理的源的 host，其余直连）
-                .okHttpClient { OkHttpClient.Builder().proxySelector(ProxyRouting.selector).build() }
+                // v1.4.23：Coil 图片同样过明文网关。
+                .okHttpClient { OkHttpClient.Builder().proxySelector(ProxyRouting.selector).addNetworkInterceptor(CleartextGate.networkInterceptor).build() }
                 .build(),
         )
         // v0.113.0：V8 sandbox 上下文注入（进程级单例，首次用 JS 源时才真正连接）

@@ -14,6 +14,15 @@ data class PlayError(
         fun classify(raw: String): PlayError {
             val r = raw.lowercase()
             return when {
+                // v1.4.23 S2：明文网关拦截（Media3 的 cause 文本或 libmpv 的
+                // “明文 HTTP 未授权：host”错误串走到这里）——告诉用户去设置页授权。
+                // 放最前：文案含“未授权”但不含 403/forbidden，别让它落进通用分支。
+                "明文" in r && "未授权" in r ->
+                    PlayError(
+                        "明文 HTTP 未授权",
+                        "这个视频地址是未授权的明文 HTTP，已被应用层网关拦截。",
+                        listOf("去设置页「已授权 HTTP 主机」允许该地址的主机后重试", "换一条线路"),
+                    )
                 // 网络类
                 "timeout" in r || "timed out" in r ->
                     PlayError(

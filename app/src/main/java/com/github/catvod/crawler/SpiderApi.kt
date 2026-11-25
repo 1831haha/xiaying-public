@@ -3,15 +3,19 @@ package com.github.catvod.crawler
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.google.gson.JsonArray
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.net.CleartextAuth
 import com.movieshell.data.source.CmsApi
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayInputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -165,6 +169,25 @@ object SpiderApi {
                                 finish()
                             }
                         }.onFailure { finish() }
+                    }
+
+                    // 1.4.23 ④应用层授权网关：未授权的 http 请求在此拦截（https 直接放行）。
+                    // 主框架 http 页本身未授权时也会被拦——webParse 取不到结果是预期行为，
+                    // 用户去设置页“已授权 HTTP 主机”里一键允许即可；这是网关的 enforcement，不是 bug。
+                    // 注意：此拦截跑在后台线程，只调 CleartextAuth 的快照读方法，不碰 UI。
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                    ): WebResourceResponse? {
+                        val gateUrl = request?.url
+                        if (gateUrl?.scheme == "http" && !CleartextAuth.isAllowedUrl(gateUrl.toString())) {
+                            CleartextAuth.recordBlocked(gateUrl.host.orEmpty())
+                            return WebResourceResponse(
+                                "text/plain", "utf-8", 403, "Forbidden", emptyMap(),
+                                ByteArrayInputStream("Cleartext host not authorized".toByteArray()),
+                            )
+                        }
+                        return super.shouldInterceptRequest(view, request)
                     }
 
                     override fun onReceivedError(

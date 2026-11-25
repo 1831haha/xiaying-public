@@ -3,6 +3,7 @@ package com.movieshell.player
 import android.content.Context
 import android.net.Uri
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.net.CleartextGate
 import com.movieshell.core.util.StoragePaths
 import com.movieshell.data.source.MusicApi
 import com.movieshell.data.store.MusicStore
@@ -40,6 +41,8 @@ object MusicDownloader {
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
+        // v1.4.23：明文 HTTP 授权网关（只加拦截器，不并入共享单例、不加 callTimeout）。
+        .addNetworkInterceptor(CleartextGate.networkInterceptor)
         .build()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

@@ -3,6 +3,7 @@ package com.movieshell.data.source
 import android.content.Context
 import com.movieshell.domain.model.ParseConfig
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.net.CleartextBlockedException
 import com.movieshell.data.store.ParseStore
 import com.movieshell.player.SniffPlayHeaders
 import kotlinx.coroutines.CancellationException
@@ -247,6 +248,11 @@ class ParseApi(
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: CleartextBlockedException) {
+            // P1-2：未授权是可恢复的状态（用户去设置页授权即恢复），不是线路故障——
+            // 只记日志、换下一条线，绝不调 markTripped（否则授权后 24 小时内仍被跳过）。
+            LogBus.w(TAG, "线路「${p.name}」明文未授权，换线：${e.message}")
+            return null
         } catch (e: Exception) {
             // 只熔断抛异常的线（网络异常/服务挂了）
             ParseStore.markTripped(p.url)

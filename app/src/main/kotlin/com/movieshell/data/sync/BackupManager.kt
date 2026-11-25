@@ -2,6 +2,8 @@ package com.movieshell.data.sync
 
 import android.content.Context
 import android.util.Log
+import com.movieshell.core.log.LogBus
+import com.movieshell.core.net.CleartextAuth
 import com.movieshell.core.util.AtomicFile
 import com.movieshell.core.util.StoragePaths
 import com.movieshell.data.novel.BookSourceManager
@@ -36,6 +38,7 @@ import com.movieshell.player.HistoryStore
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.SetSerializer
@@ -761,6 +764,23 @@ object BackupManager {
             // v2：书源/音乐源段与规则文件已在上面 rollback() 里按文件快照
             // 原样滚回（不存在过=删掉），这里不再重复写盘。
             return RestoreResult.Failed("$extraFailed，已还原")
+        }
+        // v1.4.23 ④ S1：恢复成功后，对其中 http host 做一次性祖父式授权——
+        // 只提结构化地址字段（apiSources[].url、直播订阅 url/epg、全局 EPG 地址），
+        // 不正则扫；存量订阅恢复后默认沿用，不用用户再去设置页逐个授权；authorize()
+        // 自带过滤（回环/私有 IP/预授权域不进授权集）。放成功返回前：中途失败会回滚，
+        // 授权不能先于最终成功。书源/音乐源段不做：其运行时取数 host 不在单一结构化
+        // 地址字段里，无法准确提取，不硬编。
+        val restoredHttpUrls = buildList {
+            apiSources.forEach { add(it.url) }
+            live?.let { l ->
+                l.sources.forEach { add(it.url); add(it.epg) }
+                add(l.globalEpg)
+            }
+        }
+        restoredHttpUrls.forEach { url ->
+            val httpUrl = url.toHttpUrlOrNull()
+            if (httpUrl?.scheme == "http") CleartextAuth.authorize(httpUrl.host)
         }
         // 恢复成功：删掉恢复前快照（已用不着；失败路径都留着快照可重试）
         runCatching { File(context.filesDir, PRE_RESTORE_SNAPSHOT).delete() }

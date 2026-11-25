@@ -1,5 +1,6 @@
 package com.movieshell.data.source.subtitle.builtin
 
+import com.movieshell.core.net.CleartextGate
 import com.movieshell.core.net.DEFAULT_UA_ANDROID10
 import com.movieshell.data.source.subtitle.OnlineSubtitle
 import com.movieshell.data.source.subtitle.SubtitleSource
@@ -53,6 +54,8 @@ object BuiltinSubHdSource : SubtitleSource {
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .callTimeout(30, TimeUnit.SECONDS)
+        // v1.4.23：明文 HTTP 授权网关（fetchFile 的 fileUrl 取自服务端 JSON，可为 http）。
+        .addNetworkInterceptor(CleartextGate.networkInterceptor)
         .build()
 
 

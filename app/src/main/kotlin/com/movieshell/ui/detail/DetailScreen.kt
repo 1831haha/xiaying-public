@@ -181,6 +181,7 @@ import com.movieshell.data.store.SourceHealthStore
 import com.movieshell.data.store.PlayerSettings
 import com.movieshell.data.store.SearchHistoryStore
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.net.CleartextAuth
 import com.movieshell.core.util.PointerUrl
 import com.movieshell.data.source_mgr.SubscriptionAdder
 import com.movieshell.data.source.PhpCliEngine
@@ -218,6 +219,7 @@ import com.movieshell.ui.components.EmptyState
 import com.movieshell.ui.components.PlainBlock
 import com.movieshell.ui.components.LoadingSkeleton
 import com.movieshell.ui.components.V5SectionTitle
+import com.movieshell.ui.sources.CleartextConsentDialog
 import com.movieshell.ui.search.LOCAL_DRPY_PREFIX
 import com.movieshell.ui.search.LOCAL_PY_PREFIX
 import com.movieshell.ui.search.buildSearchConfigJson
@@ -225,6 +227,7 @@ import com.movieshell.ui.search.goDetail
 import com.movieshell.ui.home.PosterSeed
 import com.movieshell.ui.theme.BrandGradientColors
 import kotlinx.coroutines.CancellationException
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
@@ -328,6 +331,12 @@ fun DetailScreen(
     // v1.2.10：同名剧搜索挪到自动播放之后（见下方 autoPlayed 附近），等主线任务落定再跑。
     // 指针卡片：已点过“添加到订阅”（防重复点按；刷新结果走 Toast）
     var pointerSubAdded by rememberSaveable(vodId) { mutableStateOf(false) }
+    // v1.4.23 ④ S1：指针卡片加订阅的明文确认——待确认 host（非空即弹确认弹窗），
+    // cleartextUrl 是当时要加的原 URL（确认回调里再校验它与 host 一致，防旧回调），
+    // cleartextOnConfirm 是点“允许访问”后要继续的原流程。
+    var cleartextHost by remember { mutableStateOf<String?>(null) }
+    var cleartextUrl by remember { mutableStateOf<String?>(null) }
+    var cleartextOnConfirm by remember { mutableStateOf<(() -> Unit)?>(null) }
     // v0.27.6：抽成函数，失败态的"重试"按钮可复用
     // v0.47.0：20 秒超时——规则 hang 住时不再无限骨架屏，转失败态可重试
     // v0.171.0：世代号 + 取消旧任务——刷新按钮、失败重试、LaunchedEffect 可并发
@@ -409,9 +418,26 @@ fun DetailScreen(
     }
     // 指针卡片：把详情页抠出的网址加进订阅（与订阅页共用 SubscriptionAdder 入口）；
     // 同步写盘 + 后台刷新，成功/失败 Toast 在刷新回调里按订阅页旧文案出。
+    // v1.4.23 ④ S1：明文 HTTP 确认——URL 是 http 且 host 未授权时先弹确认弹窗，
+    // 点“允许访问”才 authorize 并继续加订阅；https、已授权 host、内置预授权与
+    // 回环/局域网、解析失败的 URL 一律走原流程（与站源页 requestWithCleartextConsent 同款）。
+    fun requestWithCleartextConsent(url: String, proceed: () -> Unit) {
+        if (!CleartextAuth.isAllowedUrl(url)) {
+            val host = url.toHttpUrlOrNull()?.host
+            if (host != null) {
+                cleartextHost = host
+                cleartextUrl = url
+                cleartextOnConfirm = proceed
+                return
+            }
+        }
+        proceed()
+    }
     fun addPointerSub(url: String) {
         if (pointerSubAdded) return
-        if (SubscriptionAdder.addAndRefresh(context, url) != null) pointerSubAdded = true
+        requestWithCleartextConsent(url) {
+            if (SubscriptionAdder.addAndRefresh(context, url) != null) pointerSubAdded = true
+        }
     }
     LaunchedEffect(vodId) {
         // v0.294.41：有缓存（从全屏页返回）就直接用，不清空、不重查
@@ -1264,6 +1290,32 @@ fun DetailScreen(
                                                 )
                                             }
                                         }
+                                    }
+                                    // v1.4.23 ④ S1：明文确认弹窗——if 守卫（cleartextHost 非空才弹，
+                                    // TechDialog 本身不带守卫，见 1.2.22 的教训）；确认时再校验原 URL
+                                    // 与待确认 host 一致，对不上不授权、不执行（防旧回调）。
+                                    cleartextHost?.let { host ->
+                                        CleartextConsentDialog(
+                                            host = host,
+                                            onDismissRequest = {
+                                                cleartextHost = null
+                                                cleartextUrl = null
+                                                cleartextOnConfirm = null
+                                            },
+                                            onConfirm = {
+                                                val url = cleartextUrl
+                                                val resume = cleartextOnConfirm
+                                                cleartextHost = null
+                                                cleartextUrl = null
+                                                cleartextOnConfirm = null
+                                                if (url != null && url.toHttpUrlOrNull()?.host == host) {
+                                                    CleartextAuth.authorize(host)
+                                                    resume?.invoke()
+                                                } else {
+                                                    AppToast.show(context, "地址已变化，请重新确认", long = false)
+                                                }
+                                            },
+                                        )
                                     }
                                     // v1.1.19：标签——typeName 拆 chips，无则整行隐藏。
                                     val typeTags = detail?.typeName.orEmpty()

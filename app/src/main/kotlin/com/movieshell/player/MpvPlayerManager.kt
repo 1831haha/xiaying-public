@@ -7,6 +7,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.Surface
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.net.CleartextAuth
 import com.movieshell.core.util.StoragePaths
 import com.movieshell.data.store.PlayerSettings
 import com.movieshell.domain.model.SubtitleStyle
@@ -430,6 +431,22 @@ object MpvPlayerManager {
         }
         if (destroyed.get()) {
             LogBus.e("MpvPlayer", "已释放，拒绝起播")
+            return false
+        }
+        // v1.4.23 ④：明文授权预检——未授权 http 不提交 loadfile。
+        // 只预检一级 URL：动态重定向/分片内跳链在 mpv 原生栈内发生、应用侧
+        // 看不见，拦不住也不在此处拦。file://、content://、https 与解析
+        // 失败的地址按契约放行（isAllowedUrl 解析失败返回 true）。
+        if (!CleartextAuth.isAllowedUrl(url)) {
+            val host = runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault("")
+            LogBus.e("MpvPlayer", "明文 HTTP 未授权，已拒绝播放：$host")
+            // v1.4.23 S2 补记：mpv 拦的 host 也进“最近被拦”，否则设置页查不到这次拦截。
+            CleartextAuth.recordBlocked(host)
+            // 照抄 loadFilteredFile 的 loadfile 失败分支：主线程回调已有
+            // errorListener（播放页据此显示失败/进换内核重试链），play() 再
+            // 同步回 false，EngineHost.play() 据此置 actualEngine=null
+            // 并终结 Attempt；不自创新 UI、不弹 Toast。
+            mainHandler.post { errorListener?.invoke("明文 HTTP 未授权：$host") }
             return false
         }
         LogBus.i("MpvPlayer", "播放: ${url.take(120)}${if (url.length > 120) "..." else ""}")
