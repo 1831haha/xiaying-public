@@ -1,7 +1,6 @@
 package com.movieshell.data.source_mgr
 
 import android.content.Context
-import com.movieshell.core.net.CleartextBlockedException
 import com.movieshell.data.store.ApiSourceStore
 import com.movieshell.data.store.SubRefreshStore
 import com.movieshell.data.sync.WarehouseSync
@@ -112,12 +111,7 @@ object SubscriptionAdder {
                         // v0.46.0：手动刷新失败也记，“已失效”badge 及时更新。
                         SubRefreshStore.recordResult(context, subUrl, false)
                         if (!quiet) {
-                            // v1.4.23 S1-③：被明文网关拦了——Toast 里写清去设置页授权，别只报“解析失败”。
-                            if (e is CleartextBlockedException) {
-                                AppToast.show(context, "解析失败：明文 HTTP 未授权：${e.host}，去设置页「已授权 HTTP 主机」允许后重试", long = true)
-                            } else {
-                                AppToast.show(context, "解析失败：${e.message}", long = true)
-                            }
+                            AppToast.show(context, "解析失败：${e.message}", long = true)
                         }
                     }
             } finally {

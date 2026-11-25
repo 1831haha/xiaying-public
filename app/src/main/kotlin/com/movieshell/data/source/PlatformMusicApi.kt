@@ -275,7 +275,7 @@ object PlatformMusicApi {
         count: Int,
     ): List<MusicApi.Track> {
         val body = get(
-            "https://search.kuwo.cn/r.s?all=${enc(query)}&ft=music&itemset=web_2013" +
+            "http://search.kuwo.cn/r.s?all=${enc(query)}&ft=music&itemset=web_2013" +
                 "&client=kt&pn=${page - 1}&rn=$count&rformat=json&encoding=utf8",
             UA_MOBILE,
         )
@@ -298,7 +298,7 @@ object PlatformMusicApi {
 
     private suspend fun chartTracksKw(chartId: String): List<MusicApi.Track> {
         val body = get(
-            "https://kbangserver.kuwo.cn/ksong.s?from=pc&fmt=json&type=bang&data=content&id=$chartId",
+            "http://kbangserver.kuwo.cn/ksong.s?from=pc&fmt=json&type=bang&data=content&id=$chartId",
             UA_PLAIN,
         )
         val arr = JSONObject(body).optJSONArray("musiclist") ?: JSONArray()
@@ -403,7 +403,7 @@ object PlatformMusicApi {
         val switch = enc("{\"song\":1,\"album\":0,\"singer\":0,\"tagSong\":0," +
             "\"mvSong\":0,\"songlist\":0,\"bestShow\":1}")
         val body = get(
-            "https://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/search_all.do" +
+            "http://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/search_all.do" +
                 "?text=${enc(query)}&pageNo=$page&pageSize=$count" +
                 "&ua=Android_migu&searchSwitch=$switch",
             UA_IPHONE,

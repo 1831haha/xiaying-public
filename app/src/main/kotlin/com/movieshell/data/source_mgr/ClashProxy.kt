@@ -3,7 +3,6 @@ package com.movieshell.data.source_mgr
 import android.content.Context
 import android.content.SharedPreferences
 import com.movieshell.core.log.LogBus
-import com.movieshell.core.net.CleartextGate
 import com.movieshell.core.net.ProxyRouting
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -156,8 +155,6 @@ object ClashProxy {
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS)
                 .callTimeout(30, TimeUnit.SECONDS)
-                // v1.4.23：明文 HTTP 授权网关（订阅链接用户可填）。
-                .addNetworkInterceptor(CleartextGate.networkInterceptor)
                 .build()
             val req = Request.Builder()
                 .url(url)

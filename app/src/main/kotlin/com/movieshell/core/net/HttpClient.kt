@@ -92,10 +92,6 @@ object HttpClient {
             .addInterceptor(uaInterceptor)
             .addInterceptor(retryInterceptor)
             .addInterceptor(simpleLogInterceptor)
-            // v1.4.23：明文 HTTP 授权网关（应用层执法，见 CleartextGate）；
-            // noProxyClient 与 picClient 是 sharedClient.newBuilder() 派生，
-            // newBuilder 会复制 networkInterceptors，不用另加。
-            .addNetworkInterceptor(CleartextGate.networkInterceptor)
         // v1.4.8 A4：DoH 只接 defaultClient（派生 client 自动继承；独立 Builder 的
         // drpyClient / lxClient / 两个 Emby client / Spider / Coil / 下载等本版不动）。
         // 开关开时加 dns(...)，开关关时不设 dns(...)（即 Dns.SYSTEM，与今天完全一致）。
@@ -148,8 +144,6 @@ object HttpClient {
             .cookieJar(memoryCookieJar)
             .addInterceptor(uaInterceptor)
             .addInterceptor(simpleLogInterceptor)
-            // v1.4.23：明文 HTTP 授权网关（与 defaultClient 同口径）。
-            .addNetworkInterceptor(CleartextGate.networkInterceptor)
             .build()
     }
 
@@ -175,8 +169,6 @@ object HttpClient {
             .cookieJar(memoryCookieJar)
             .addInterceptor(uaInterceptor)
             .addInterceptor(simpleLogInterceptor)
-            // v1.4.23：明文 HTTP 授权网关（与 defaultClient 同口径）。
-            .addNetworkInterceptor(CleartextGate.networkInterceptor)
             .build()
     }
 
@@ -407,7 +399,6 @@ object HttpClient {
             try {
                 return@Interceptor chain.proceed(chain.request())
             } catch (e: IOException) {
-                if (e is CleartextBlockedException) throw e  // v1.4.23：明文未授权不重试，直接抛
                 if (chain.call().isCanceled()) throw e  // 取消表现为 IOException("Canceled")，不睡不重试
                 val m = chain.request().method
                 if (!m.equals("GET", ignoreCase = true) && !m.equals("HEAD", ignoreCase = true)) throw e  // 非幂等不重试

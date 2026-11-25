@@ -1,7 +1,6 @@
 package com.movieshell.data.source
 
 import com.movieshell.core.log.LogBus
-import com.movieshell.core.net.CleartextGate
 import com.movieshell.core.net.HttpClient
 import com.movieshell.core.net.ProxyRouting
 import com.movieshell.core.net.ioSafe
@@ -345,8 +344,6 @@ object EmbyApi {
             .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
             .callTimeout(60, TimeUnit.SECONDS)
-            // v1.4.23：明文 HTTP 授权网关（证书校验逻辑不动）。
-            .addNetworkInterceptor(CleartextGate.networkInterceptor)
             .sslSocketFactory(socketFactory, trustManager)
             .hostnameVerifier { _, _ -> true }
             .build()
@@ -366,8 +363,6 @@ object EmbyApi {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
-            // v1.4.23：明文 HTTP 授权网关（证书校验逻辑不动，不加 callTimeout）。
-            .addNetworkInterceptor(CleartextGate.networkInterceptor)
             .sslSocketFactory(socketFactory, trustManager)
             .hostnameVerifier { _, _ -> true }
             .build()

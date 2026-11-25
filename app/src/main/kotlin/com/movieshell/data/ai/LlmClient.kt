@@ -1,7 +1,6 @@
 package com.movieshell.data.ai
 
 import android.content.Context
-import com.movieshell.core.net.CleartextGate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -68,8 +67,6 @@ object LlmClient {
             .writeTimeout(15, TimeUnit.SECONDS)
             .callTimeout(90, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
-            // v1.4.23：明文 HTTP 授权网关（仅 custom provider 的用户填 baseUrl 可为 http）。
-            .addNetworkInterceptor(CleartextGate.networkInterceptor)
             .build()
     }
 

@@ -9,7 +9,6 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.movieshell.core.log.LogBus
-import com.movieshell.core.net.CleartextAuth
 import com.movieshell.player.PlayHeaders
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -224,21 +223,7 @@ object AutoSniffer {
 
                         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                             val reqUrl = request?.url?.toString().orEmpty()
-                            if (reqUrl.isEmpty()) return super.shouldInterceptRequest(view, request)
-                            // 1.4.23 ④应用层授权网关：未授权的 http 请求在此拦截（https 直接放行）。
-                            // 主框架 http 页本身未授权时也会被拦——嗅探不到是预期行为，用户去设置页
-                            // “已授权 HTTP 主机”里一键允许即可；这是网关的 enforcement，不是 bug。
-                            // P1-5：授权判断必须在 done 检查之前——done=true 后仍有后续请求，
-                            // 放在 done 之后等于嗅探完成后全部绕过网关。
-                            val gateUrl = request?.url
-                            if (gateUrl?.scheme == "http" && !CleartextAuth.isAllowedUrl(gateUrl.toString())) {
-                                CleartextAuth.recordBlocked(gateUrl.host.orEmpty())
-                                return WebResourceResponse(
-                                    "text/plain", "utf-8", 403, "Forbidden", emptyMap(),
-                                    ByteArrayInputStream("Cleartext host not authorized".toByteArray()),
-                                )
-                            }
-                            if (done.get()) return super.shouldInterceptRequest(view, request)
+                            if (reqUrl.isEmpty() || done.get()) return super.shouldInterceptRequest(view, request)
                             if (SniffConfig.adFilterEnabled && SniffEngine.isAdHost(request?.url?.host.orEmpty())) {
                                 return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                             }

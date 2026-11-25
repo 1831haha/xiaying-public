@@ -1,7 +1,6 @@
 package com.github.catvod.crawler
 
 import android.content.Context
-import com.movieshell.core.net.CleartextGate
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -72,13 +71,6 @@ open class Spider {
                     .readTimeout(15, TimeUnit.SECONDS)
                     .writeTimeout(15, TimeUnit.SECONDS)
                     .dns(safeDns())
-                    // v1.4.23 ④：jar spider 运行时请求进明文授权网关——
-                    // 网络拦截器（见每跳 URL，含重定向后新 host）。
-                    // 与 SpiderApi 的 CmsApi.defaultClient() 不同路：那路
-                    // 走共享 client、网关由 A 组挂在 HttpClient 上；这路是
-                    // spider 子类经 dex 直接调 Spider.client() 拿的独立单例，
-                    // 只能在此处接。jar 下载本身 1.4.20 已强制 https，不冲突。
-                    .addNetworkInterceptor(CleartextGate.networkInterceptor)
                     .build()
                     .also { sharedClient = it }
             }

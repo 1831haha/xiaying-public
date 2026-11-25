@@ -60,8 +60,6 @@ object WebParseSourceManager {
      * 网址归一化：直接输 www 开头、域名开头、// 开头都行，缺协议默认补 https://；
      * 已带 http:// 的原样保留（不强制升 https，个别只支持 http 的站还能用）；
      * 其他协议、带空格、无域名点的一律判非法，由调用方提示。
-     * 注意：host 含“.”是必要条件——裸 localhost、example（无点）同样返回 null，
-     * 不是只有带点的裸域名才合法。
      */
     fun normalizeUrl(raw: String): String? {
         val t = raw.trim()

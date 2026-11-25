@@ -14,6 +14,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -31,7 +32,6 @@ import com.movieshell.core.log.LogBus
 import com.movieshell.domain.model.PlayerEngine
 import com.movieshell.core.util.StoragePaths
 import com.movieshell.domain.model.SubtitleStyle
-import com.movieshell.core.net.CleartextBlockedException
 import com.movieshell.core.net.DEFAULT_UA
 import com.movieshell.core.net.HttpClient
 import com.movieshell.data.source.EmbyApi
@@ -39,7 +39,6 @@ import com.movieshell.data.source.SniffConfig
 import com.movieshell.data.store.PlayerSettings
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,7 +47,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * ExoPlayer 单例封装。
  *
  * - [init] 幂等，多次调用只创建一次播放器；
- * - [play] 每次播放都用携带 headers 的 [OkHttpDataSource.Factory] 重新构建
+ * - [play] 每次播放都用携带 headers 的 [DefaultHttpDataSource.Factory] 重新构建
  *   MediaSource，HLS / DASH / MP4 由 Media3 按 URL 自动适配；
  * - [release] 释放播放器，应用真正退出时调用。
  */
@@ -115,9 +114,6 @@ object PlayerManager {
 
     /** v0.100.0：硬解失败自动 fallback 每次播放只做一次，play() 重置 */
     private var decoderFallbackDone: Boolean = false
-
-    /** v1.4.23 S2：明文网关拦截提示同一 host 只弹一次（重试链每次失败都会进 onPlayerError）。 */
-    private var cleartextToastHost: String? = null
 
     /**
      * v0.186.0 第 5 组：decoderFallbackDone 按地址重置，不在每次 play() 重置。
@@ -336,23 +332,6 @@ object PlayerManager {
     private val listener2 = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
             LogBus.e("Player", "播放器错误：${error.errorCodeName} ${error.message}")
-            // v1.4.23 S2：被明文网关拦了——cause 链里找 CleartextBlockedException，
-            // 给一句可见提示（去设置页授权），别让它静默走重试链；同一 host 只提示一次。
-            generateSequence(error.cause) { it.cause }
-                .filterIsInstance<CleartextBlockedException>()
-                .firstOrNull()
-                ?.let { blocked ->
-                    if (cleartextToastHost != blocked.host) {
-                        cleartextToastHost = blocked.host
-                        appContext?.let { app ->
-                            AppToast.show(
-                                app,
-                                "该地址是未授权的明文 HTTP，已被拦截：去设置页“已授权 HTTP 主机”允许 ${blocked.host} 后再播",
-                                long = true,
-                            )
-                        }
-                    }
-                }
             // v1.4.6 A1.1：Media3 尝试失败终结；换内核/重试的新 Attempt 由后续 EngineHost.play() 建。
             PlaybackDiagnostic.finishAttempt(TraceOutcome.FAILED)
             // v0.100.0：硬解初始化失败 → 自动切 libmpv 重播（每次播放只做一次）。
@@ -443,7 +422,7 @@ object PlayerManager {
     /**
      * 播放 [url]。headers 会作为本次请求的默认请求头；
      * 其中 "User-Agent" 会单独走工厂的 UA 通道（保证真正生效，
-     * 不受 [OkHttpDataSource.Factory] 内置 UA 覆盖）。
+     * 不受 [DefaultHttpDataSource.Factory] 内置 UA 覆盖）。
      *
      * @param startPositionMs 起播位置（毫秒），用于断点续播，<=0 表示从头播。
      * @param subtitleUrl 外挂字幕地址（.srt/.vtt/.ass，http(s) 或 file:// 本地），为空则不挂字幕。
@@ -510,8 +489,7 @@ object PlayerManager {
         // v1.2.14：自签 Emby 播放走 OkHttp 放行数据源——media3-datasource-okhttp
         // 已在依赖里，OkHttpDataSource.Factory 直接吃放行证书的 OkHttpClient，
         // 作用域只限本次播放的 factory；超时走该 client 自身的 15 秒口径，
-        // 跨协议重定向 OkHttp 默认即跟随；默认分支同样走 OkHttpDataSource
-        //（共享 client，见下），三分支至此全部走 OkHttp，不再有 HttpURLConnection 分支。
+        // 跨协议重定向 OkHttp 默认即跟随；其他播放走原 DefaultHttpDataSource。
         val httpFactory: androidx.media3.datasource.HttpDataSource.Factory =
             if (EngineHost.shouldBypassCert(ignoreCert, url)) {
                 // v1.4.6 A1.1：诊断浅拷贝挂 EventListener（共享单例不动，关时原样返回）。
@@ -521,54 +499,25 @@ object PlayerManager {
                     // 采样码率进 bitrateEstimate，供顶栏显示网速。
                     .setTransferListener(bandwidthMeter)
             } else if (useProxy) {
-                // v1.3.26：走代理的源——改走挂了 selector 的共享客户端，
+                // v1.3.26：走代理的源——DefaultHttpDataSource 走 HttpURLConnection，
+                // 吃不到 OkHttp 的代理选择器；改走挂了 selector 的共享客户端，
                 // host 集里的播放地址走本地 clash 代理，其余直连。
-                // v1.4.23 P1-1：派生播放 client 去掉 60 秒整 call 上限（渐进式
-                // MP4 慢速链路会被掐断），15 秒单次读超时仍作停滞保护。
-                val proxyPlayClient = HttpClient.defaultClient().newBuilder()
-                    .callTimeout(0, TimeUnit.SECONDS)
-                    .build()
-                OkHttpDataSource.Factory(PlaybackDiagnostic.maybeWrapClient(proxyPlayClient))
+                OkHttpDataSource.Factory(PlaybackDiagnostic.maybeWrapClient(HttpClient.defaultClient()))
                     .setUserAgent(ua)
                     .setTransferListener(bandwidthMeter)
             } else {
-                // v1.4.23 ④：默认分支改走 OkHttpDataSource（共享 client），与
-                // useProxy 分支同款写法——播放流量进应用层明文授权网关（A 组
-                // CleartextGate 拦截器挂在 HttpClient.defaultClient() 上），
-                // DNS/建连经 maybeWrapClient 可观测，不再标未取到（旧分支走
-                // HttpURLConnection、无钩子可观测才标的那两行已删）。
-                // Media3 1.4.1 的 OkHttpDataSource.Factory 没有
-                // setReadTimeoutMs/setConnectionTimeoutMs（已对 1.4.1
-                // sources.jar 核对：只有 setUserAgent/setCacheControl/
-                // setContentTypePredicate/setTransferListener），超时走
-                // OkHttpClient 自身；跨协议重定向 OkHttp 默认即跟随
-                //（followRedirects/followSslRedirects 均为 true，
-                // defaultClient 未改过），与旧分支显式
-                // setAllowCrossProtocolRedirects(true) 等价。
-                val baseClient = HttpClient.defaultClient()
-                val playClient = if (url.startsWith("http://127.0.0.1")) {
-                    // v0.294.34：本机磁力边下边播（127.0.0.1）读数据要等下载，
-                    // 读超时放宽到 3 分钟，别在缓冲中途超时。共享单例另有 60 秒
-                    // 整 call 上限，会先于 180 秒读超时掐断，故一并放开整 call
-                    // 上限（只限回环本地播放，单次读仍受 180 秒约束）；newBuilder
-                    // 复制全部拦截器（含明文网关）与 CookieJar，共享单例不动。
-                    baseClient.newBuilder()
-                        .readTimeout(180, TimeUnit.SECONDS)
-                        .callTimeout(0, TimeUnit.SECONDS)
-                        .build()
-                } else {
-                    // v1.4.23 P1-1：非回环同样派生播放 client 去掉 60 秒整 call
-                    // 上限——共享单例的 CALL_TIMEOUT_S=60 会掐断渐进式 MP4 慢速
-                    // 链路（一次 open() 读完全文件）；15 秒单次读超时保留作
-                    // 停滞保护。newBuilder 复制代理选择器、CookieJar、全部
-                    // network interceptor（含明文网关）、DNS 与 EventListener，
-                    // 共享单例不动。
-                    baseClient.newBuilder()
-                        .callTimeout(0, TimeUnit.SECONDS)
-                        .build()
-                }
-                OkHttpDataSource.Factory(PlaybackDiagnostic.maybeWrapClient(playClient))
+                // v1.4.6 A1.1：默认分支走 HttpURLConnection，不经过 OkHttp，
+                // DNS/建连无钩子可观测，标未取到（不是连接复用、不是未到该段）。
+                PlaybackDiagnostic.markMissing(TraceStage.DNS, TraceMissing.UNAVAILABLE)
+                PlaybackDiagnostic.markMissing(TraceStage.CONNECT, TraceMissing.UNAVAILABLE)
+                DefaultHttpDataSource.Factory()
                     .setUserAgent(ua)
+                    .setConnectTimeoutMs(DefaultHttpDataSource.DEFAULT_CONNECT_TIMEOUT_MILLIS)
+                    // v0.294.34：本机磁力边下边播（127.0.0.1）读数据要等下载，放宽到 3 分钟，别在缓冲中途超时
+                    .setReadTimeoutMs(
+                        if (url.startsWith("http://127.0.0.1")) 180_000 else DefaultHttpDataSource.DEFAULT_READ_TIMEOUT_MILLIS,
+                    )
+                    .setAllowCrossProtocolRedirects(true)
                     // v1.1.19：带宽表挂上游——只计量真正走网络的流量（缓存命中不经过这里），
                     // 采样码率进 bitrateEstimate，供顶栏显示网速。
                     .setTransferListener(bandwidthMeter)

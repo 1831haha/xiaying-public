@@ -8,9 +8,7 @@ import com.movieshell.data.store.SubRefreshStore
 import com.movieshell.domain.model.BookSource
 import com.movieshell.data.novel.BookSourceManager
 import com.movieshell.core.log.LogBus
-import com.movieshell.core.net.CleartextAuth
 import com.movieshell.data.source_mgr.SubSiteStore
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONArray
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -104,26 +102,12 @@ object SubscribePlugin {
             }
         }
         if (liveAdded > 0) runCatching { LiveStore.refresh(context) }
-        // v1.4.23 ④ S1：插件包安装后，对其中 http host 做一次性祖父式授权——
-        // 只提结构化地址字段（本次安装/保留的 vod/live 条目 url），不正则扫；
-        // 新装的 http 订阅升级后默认沿用，不用用户再去设置页逐个授权；authorize()
-        // 自带过滤（回环/私有 IP/预授权域不进授权集）。
-        files.filter { it.startsWith("vod:") || it.startsWith("live:") }
-            .map { it.substringAfter(":") }
-            .forEach { url ->
-                val httpUrl = url.toHttpUrlOrNull()
-                if (httpUrl?.scheme == "http") CleartextAuth.authorize(httpUrl.host)
-            }
         val parts = listOfNotNull(
             if (spec.vod.isNotEmpty()) "点播订阅 +$vodAdded" else null,
             if (spec.live.isNotEmpty()) "直播订阅 +$liveAdded" else null,
             if (spec.book.length() > 0) "书源 +$bookAdded" else null,
         )
-        // v1.4.23 ④ S1：书源段不做祖父授权——书源运行时取数 host 不在单一结构化
-        // 地址字段里（searchUrl 可为绝对地址、指向另一 host），提不准，不硬编；
-        // 装了书源时在完成文案里提示去设置页授权，由用户按需处理。
-        val bookHint = if (bookAdded > 0) "；书源若走明文 HTTP，请去设置 → 网络 → 已授权 HTTP 主机里授权" else ""
-        return files to "已订阅：" + parts.joinToString("，") + "（已存在的不重复添加）$bookHint"
+        return files to "已订阅：" + parts.joinToString("，") + "（已存在的不重复添加）"
     }
 
     suspend fun remove(context: Context, files: List<String>) {

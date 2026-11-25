@@ -1,7 +1,6 @@
 package com.movieshell.ui.sources
 
 import com.movieshell.core.log.LogBus
-import com.movieshell.core.net.CleartextAuth
 import com.movieshell.core.util.SafeFileName
 import com.movieshell.ui.components.AppSearchBar
 import com.movieshell.ui.theme.V5
@@ -130,7 +129,6 @@ import com.movieshell.data.source_mgr.WebSourceManager
 import com.movieshell.data.source_mgr.WebParseSourceManager
 import com.movieshell.data.source_mgr.ZipPySourceStore
 import com.movieshell.ui.components.AppButton
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import com.movieshell.ui.components.AppButtonVariant
 import com.movieshell.ui.components.AppCard
 import com.movieshell.ui.components.CapsuleTabBar
@@ -1270,13 +1268,6 @@ fun SourcesScreen(
         currentSubSiteKey = withContext(Dispatchers.IO) { SubSiteStore.currentSiteKey(context) }
     }
 
-    // v1.4.23 ④：明文 HTTP 确认——待确认的 host（非空即弹 CleartextConsentDialog），
-    // cleartextUrl 是当时要加的原 URL（确认回调里再校验它与 host 一致，防旧回调），
-    // cleartextOnConfirm 是用户点“允许访问”后要继续的原流程（添加订阅/网页源）。
-    var cleartextHost by remember { mutableStateOf<String?>(null) }
-    var cleartextUrl by remember { mutableStateOf<String?>(null) }
-    var cleartextOnConfirm by remember { mutableStateOf<(() -> Unit)?>(null) }
-
     var showAddDialog by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf("") }
     var urlInput by remember { mutableStateOf("") }
@@ -1333,24 +1324,6 @@ fun SourcesScreen(
         showWebParseAddDialog = false
         AppToast.show(context, "已添加 ${site.name}", long = false)
         activateWebParse(site)
-    }
-
-    // v1.4.23 ④：明文 HTTP 授权网关的用户侧入口——URL 是 http 且 host 未授权时，
-    // 先弹确认弹窗（点“允许访问”才 authorize 并继续原流程，取消则什么都不做）；
-    // https、已授权 host、内置预授权与回环/局域网、解析失败的 URL 一律走原流程
-    //（CleartextAuth.isAllowedUrl 解析失败时 fail-open 返回 true；host 取不到
-    // 时不弹、直接走原流程）。
-    fun requestWithCleartextConsent(url: String, proceed: () -> Unit) {
-        if (!CleartextAuth.isAllowedUrl(url)) {
-            val host = url.toHttpUrlOrNull()?.host
-            if (host != null) {
-                cleartextHost = host
-                cleartextUrl = url
-                cleartextOnConfirm = proceed
-                return
-            }
-        }
-        proceed()
     }
 
     fun addSubscription() {
@@ -2261,7 +2234,7 @@ fun SourcesScreen(
             onDismissRequest = { showAddDialog = false },
             title = "添加订阅",
             confirmText = "确定",
-            onConfirm = { requestWithCleartextConsent(urlInput.trim()) { addSubscription() } },
+            onConfirm = { addSubscription() },
         ) {
                 Column {
                     TechTextField(
@@ -2322,42 +2295,12 @@ fun SourcesScreen(
         }
     }
 
-    // ---- v1.4.23 ④：明文 HTTP 确认——调用处必须包 if 守卫（TechDialog 本身不带守卫，
-    // 见 1.2.22 的教训）；确认后 authorize 该 host 再继续原流程，取消则什么都不做
-    //（添加对话框还开着，用户可改地址或取消）。
-    cleartextHost?.let { host ->
-        CleartextConsentDialog(
-            host = host,
-            onDismissRequest = {
-                cleartextHost = null
-                cleartextUrl = null
-                cleartextOnConfirm = null
-            },
-            onConfirm = {
-                // GPT P2：确认回调再校验——原 URL 的 host 须与刚才确认的 host 一致才
-                // 授权并继续；对不上（待确认期间地址被改过）则不授权、不执行原流程。
-                // 弹窗是模态的，正常情况下不会触发，只防旧回调授权错地址。
-                val url = cleartextUrl
-                val resume = cleartextOnConfirm
-                cleartextHost = null
-                cleartextUrl = null
-                cleartextOnConfirm = null
-                if (url != null && url.toHttpUrlOrNull()?.host == host) {
-                    CleartextAuth.authorize(host)
-                    resume?.invoke()
-                } else {
-                    AppToast.show(context, "地址已变化，请重新确认", long = false)
-                }
-            },
-        )
-    }
-
     if (showWebAddDialog) {
         TechDialog(
             onDismissRequest = { showWebAddDialog = false },
             title = "添加网页站源",
             confirmText = "确定",
-            onConfirm = { requestWithCleartextConsent(webUrlInput.trim()) { addWebSite() } },
+            onConfirm = { addWebSite() },
         ) {
                 Column {
                     Text(
@@ -2408,14 +2351,7 @@ fun SourcesScreen(
             onDismissRequest = { showWebParseAddDialog = false },
             title = "添加通用网页源",
             confirmText = "添加并启用",
-            // v1.4.23 ④：先归一化再判——裸域名默认补 https:// 不弹确认，
-            // 显式 http:// 才按 host 确认；归一化失败（非法地址）时按原输入走，
-            // isAllowedUrl fail-open 直接放行，由 addWebParseSite 置错误态。
-            onConfirm = {
-                val checkUrl = WebParseSourceManager.normalizeUrl(webParseUrlInput.trim())
-                    ?: webParseUrlInput.trim()
-                requestWithCleartextConsent(checkUrl) { addWebParseSite() }
-            },
+            onConfirm = { addWebParseSite() },
         ) {
                 Column {
                     Text(

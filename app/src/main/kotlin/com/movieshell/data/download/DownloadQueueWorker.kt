@@ -11,7 +11,6 @@ import com.movieshell.core.util.AtomicFile
 import com.movieshell.data.store.DlStatus
 import com.movieshell.data.store.DownloadStore
 import com.movieshell.data.store.DownloadTask
-import com.movieshell.core.net.CleartextGate
 import com.movieshell.core.net.DEFAULT_UA
 import com.movieshell.player.M3u8AdFilter
 import com.movieshell.player.SniffPlayHeaders
@@ -40,8 +39,6 @@ class DownloadQueueWorker(
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
-        // v1.4.23：明文 HTTP 授权网关（只加拦截器，不并入共享单例、不加 callTimeout）。
-        .addNetworkInterceptor(CleartextGate.networkInterceptor)
         .build()
 
     // v0.246.0：播单节流基准（Worker 每任务一实例，实例字段即任务内状态）

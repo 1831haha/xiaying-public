@@ -1,6 +1,5 @@
 package com.movieshell.ui.web
 
-import com.movieshell.core.net.CleartextAuth
 import com.movieshell.data.source.JS_VIDEO_POLL
 import com.movieshell.data.source.JS_HOOK_INSTALL
 import com.movieshell.data.source.JS_LAZY_PLAY
@@ -907,17 +906,6 @@ fun WebSniffScreen(
                             ): WebResourceResponse? {
                                 val webView = view
                                 val reqUrl = request?.url?.toString().orEmpty()
-                                // 1.4.23 ④应用层授权网关：未授权的 http 请求在此拦截（https 直接放行）。
-                                // 主框架 http 页本身未授权时也会被拦——嗅探不到是预期行为，用户去设置页
-                                // “已授权 HTTP 主机”里一键允许即可；这是网关的 enforcement，不是 bug。
-                                val gateUrl = request?.url
-                                if (gateUrl?.scheme == "http" && !CleartextAuth.isAllowedUrl(gateUrl.toString())) {
-                                    CleartextAuth.recordBlocked(gateUrl.host.orEmpty())
-                                    return WebResourceResponse(
-                                        "text/plain", "utf-8", 403, "Forbidden", emptyMap(),
-                                        ByteArrayInputStream("Cleartext host not authorized".toByteArray()),
-                                    )
-                                }
                                 // v0.94：广告域名黑名单——命中直接返回空响应拦截，不请求
                                 if (SniffConfig.adFilterEnabled && reqUrl.isNotEmpty()) {
                                     val host = request?.url?.host.orEmpty()
@@ -961,16 +949,6 @@ fun WebSniffScreen(
                                         ): WebResourceResponse? {
                                             val reqUrl = request.url.toString()
                                             if (reqUrl.isEmpty()) return null
-                                            // 1.4.23 ④应用层授权网关：SW 上下文的 fetch 走不到 WebViewClient，
-                                            // 未授权 http 在此同样拦截（与上面 WebViewClient 同口径）。
-                                            val gateUrl = request.url
-                                            if (gateUrl.scheme == "http" && !CleartextAuth.isAllowedUrl(gateUrl.toString())) {
-                                                CleartextAuth.recordBlocked(gateUrl.host.orEmpty())
-                                                return WebResourceResponse(
-                                                    "text/plain", "utf-8", 403, "Forbidden", emptyMap(),
-                                                    ByteArrayInputStream("Cleartext host not authorized".toByteArray()),
-                                                )
-                                            }
                                             when (SniffEngine.sniffKind(reqUrl)) {
                                                 SniffKind.DIRECT -> addCandidate(
                                                     reqUrl, "网络拦截",

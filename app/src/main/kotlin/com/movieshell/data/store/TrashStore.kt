@@ -1,14 +1,12 @@
 package com.movieshell.data.store
 
 import android.content.Context
-import com.movieshell.core.net.CleartextAuth
 import com.movieshell.core.util.StoragePaths
 import com.movieshell.data.source_mgr.ApiSource
 import com.movieshell.data.source_mgr.PhpSourceManager
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.File
 import java.util.UUID
 
@@ -182,15 +180,6 @@ object TrashStore {
             else -> false
         }
         if (ok) remove(context, item.id)
-        // v1.4.23 ④ S1：回收站恢复订阅后，对该订阅 http host 做一次性祖父式授权——
-        // detail 就是当初 trashSubscription 记下的订阅地址（结构化字段），不正则扫；
-        // 恢复的 http 订阅默认沿用，不用用户再去设置页授权。authorize() 自带过滤
-        // （回环/私有 IP/预授权域不进授权集）。手动直播频道（live-manual）不在此列，
-        // 其 detail 是频道播放地址、非订阅刷新地址，另议。
-        if (ok && item.kind == "sub") {
-            val httpUrl = item.detail.toHttpUrlOrNull()
-            if (httpUrl?.scheme == "http") CleartextAuth.authorize(httpUrl.host)
-        }
         return ok
     }
 
