@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.OkHttp
 import okhttp3.Request
 import java.io.File
 import java.net.URI
@@ -726,8 +727,44 @@ object SubSiteStore {
 
     // ---------------- 内部工具 ----------------
 
+    /**
+     * v1.4.18：UA 嗅探重试——部分订阅站只认 okhttp UA，浏览器 UA 只给 HTML 落地页
+     *（py+本地包 / 摸鱼实测：App UA 拿 9795 字符 HTML，okhttp UA 拿真配置）。
+     * 这是兼容订阅站的 okhttp 风格 UA；从 OkHttp 自身的公开常量派生
+     *（okhttp3.OkHttp.VERSION，4.7.0 起公开），依赖升级自动跟随，不会静默过期。
+     * 注意：本 App 的 uaInterceptor 会在无 UA 头时补浏览器 UA，所以重试必须显式设头，不能靠不设头。
+     */
+    internal const val SUB_RETRY_UA = "okhttp/${OkHttp.VERSION}"
+
+    /**
+     * v1.4.18：正文像不像 HTML 落地页。去 BOM 与前导空白后以 '<' 开头即判 HTML。
+     * 合法正文的首字符：JSON 配置 '{'、多仓 TXT（URL 或“名字,URL”）、base64 包头——
+     * 均不以 '<' 开头。只认 '<' 开头的 HTML 文档；纯文本报错页（如“服务暂不可用”）
+     * 不触发重试，这是刻意的：解析失败的原因很多，不能一律归因于 UA。
+     */
+    internal fun looksLikeHtml(raw: String): Boolean {
+        val text = raw.trimStart('\uFEFF', ' ', '\t', '\r', '\n')
+        return text.startsWith("<")
+    }
+
+    /** URL 脱敏：日志只记 host，不打完整地址与 query 参数（订阅地址可能带 token）。 */
+    private fun urlHost(url: String): String =
+        runCatching { URI(url).host.orEmpty() }.getOrDefault("")
+
     private fun downloadText(url: String): String {
-        val req = Request.Builder().url(url).header("User-Agent", DEFAULT_UA).build()
+        val first = downloadTextWithUa(url, DEFAULT_UA)
+        if (!looksLikeHtml(first)) return first
+        // 认 UA 的订阅站：首拉只拿到 HTML 落地页，换 okhttp UA 只重试一次
+        LogBus.i(TAG, "订阅疑似落地页，换 okhttp UA 重试 host=${urlHost(url)}")
+        val retry = downloadTextWithUa(url, SUB_RETRY_UA)
+        if (looksLikeHtml(retry)) {
+            LogBus.w(TAG, "切换 UA 后仍返回疑似 HTML host=${urlHost(url)}")
+        }
+        return retry
+    }
+
+    private fun downloadTextWithUa(url: String, ua: String): String {
+        val req = Request.Builder().url(url).header("User-Agent", ua).build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
             return resp.body?.string() ?: throw IllegalStateException("空响应")
