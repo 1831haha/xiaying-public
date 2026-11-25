@@ -110,6 +110,7 @@ import com.movieshell.ui.components.TechDialog
 import com.movieshell.ui.components.TechTextField
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -148,7 +149,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -178,6 +181,8 @@ import com.movieshell.data.store.SourceHealthStore
 import com.movieshell.data.store.PlayerSettings
 import com.movieshell.data.store.SearchHistoryStore
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.util.PointerUrl
+import com.movieshell.data.source_mgr.SubscriptionAdder
 import com.movieshell.data.source.PhpCliEngine
 import com.movieshell.data.store.SourceStateStore
 import com.movieshell.data.source_mgr.PhpSourceManager
@@ -249,6 +254,7 @@ fun DetailScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
 
     // v0.294.45：详情页原地全屏状态——小窗 ↔ 全屏只是同一个 PlayerScreen
     // 换容器，不跳独立页、不重建画面。真离开详情页（返回、进演员页等）
@@ -320,6 +326,8 @@ fun DetailScreen(
     }
     val sameTitleKey = detail?.vodName?.takeIf { it.isNotBlank() }.orEmpty()
     // v1.2.10：同名剧搜索挪到自动播放之后（见下方 autoPlayed 附近），等主线任务落定再跑。
+    // 指针卡片：已点过“添加到订阅”（防重复点按；刷新结果走 Toast）
+    var pointerSubAdded by rememberSaveable(vodId) { mutableStateOf(false) }
     // v0.27.6：抽成函数，失败态的"重试"按钮可复用
     // v0.47.0：20 秒超时——规则 hang 住时不再无限骨架屏，转失败态可重试
     // v0.171.0：世代号 + 取消旧任务——刷新按钮、失败重试、LaunchedEffect 可并发
@@ -399,6 +407,12 @@ fun DetailScreen(
             }
         }
     }
+    // 指针卡片：把详情页抠出的网址加进订阅（与订阅页共用 SubscriptionAdder 入口）；
+    // 同步写盘 + 后台刷新，成功/失败 Toast 在刷新回调里按订阅页旧文案出。
+    fun addPointerSub(url: String) {
+        if (pointerSubAdded) return
+        if (SubscriptionAdder.addAndRefresh(context, url) != null) pointerSubAdded = true
+    }
     LaunchedEffect(vodId) {
         // v0.294.41：有缓存（从全屏页返回）就直接用，不清空、不重查
         if (cached?.detail != null) return@LaunchedEffect
@@ -409,6 +423,14 @@ fun DetailScreen(
     // 真实选集：vodPlayFrom/vodPlayUrl 对齐
     val episodes: List<Episode> = remember(detail) {
         detail?.let { SiteRepository().parseEpisodes(it) }.orEmpty()
+    }
+    // 指针卡片：标题或播放地址里带网址时，详情页标题下露出复制/加订阅入口；
+    // 没有网址的普通视频项本值为 null，详情页一点不动。
+    val pointerUrl = remember(detail, episodes) {
+        PointerUrl.extractFirstUrl(
+            detailTitle(detail, vodId),
+            *episodes.map { it.url }.toTypedArray(),
+        )
     }
     // 多线路：按 Episode.flag 分组；只有一条线路时 playLines.size==1，不显示 Tab
     val playLines: List<PlayLine> = remember(episodes) {
@@ -1205,6 +1227,42 @@ fun DetailScreen(
                                                 contentDescription = "下载",
                                                 tint = v.onSurfaceVariant,
                                             )
+                                        }
+                                    }
+                                    // 指针卡片：标题或播放地址里带网址（如多仓清单、弹幕服务地址）时，
+                                    // 点开播不了；在标题下露出网址原文 + 复制 / 加订阅，普通视频项不显示。
+                                    if (pointerUrl != null) {
+                                        Column(modifier = Modifier.padding(top = 8.dp)) {
+                                            SelectionContainer {
+                                                Text(
+                                                    text = pointerUrl,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = v.onSurfaceVariant,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                modifier = Modifier.padding(top = 4.dp),
+                                            ) {
+                                                AppButton(
+                                                    text = "复制链接",
+                                                    onClick = {
+                                                        clipboard.setText(AnnotatedString(pointerUrl))
+                                                        AppToast.show(context, "链接已复制", long = false)
+                                                    },
+                                                    variant = AppButtonVariant.Secondary,
+                                                    compact = true,
+                                                )
+                                                AppButton(
+                                                    text = if (pointerSubAdded) "已添加" else "添加到订阅",
+                                                    onClick = { addPointerSub(pointerUrl) },
+                                                    variant = AppButtonVariant.Primary,
+                                                    compact = true,
+                                                    enabled = !pointerSubAdded,
+                                                )
+                                            }
                                         }
                                     }
                                     // v1.1.19：标签——typeName 拆 chips，无则整行隐藏。

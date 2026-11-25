@@ -122,6 +122,7 @@ import com.movieshell.data.source_mgr.SubCache
 import com.movieshell.data.source_mgr.SubSiteRecord
 import com.movieshell.data.store.SubRefreshStore
 import com.movieshell.data.source_mgr.SubSiteStore
+import com.movieshell.data.source_mgr.SubscriptionAdder
 import com.movieshell.data.store.TrashStore
 import com.movieshell.data.sync.WarehouseSync
 import com.movieshell.data.source_mgr.WebSourceManager
@@ -148,7 +149,6 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -645,55 +645,20 @@ fun SourcesScreen(
     /** 解析订阅：下载 TVBox JSON，展开站点并落盘。quiet=true 不弹结果 Toast（多仓子仓自动解析用，避免连环弹） */
     fun parseSubscription(subUrl: String, quiet: Boolean = false) {
         if (subParsing[subUrl] == true) return
-        // v0.9.0：用进程级 scope，用户切走页面刷新也要跑完
-        //（composable scope 会在组合离开时取消，报 scope left the composition）
-        SubSiteStore.appScope.launch {
-            subParsing[subUrl] = true
-            SubSiteStore.refresh(context, subUrl)
-                .onSuccess { cache ->
-                    // v0.46.0：手动刷新也记状态，"已失效" badge 及时更新
-                    SubRefreshStore.recordResult(context, subUrl, true)
-                    subCaches[subUrl] = cache
-                    // v0.43.0：多仓 Toast 单独文案
-                    if (cache.warehouses.isNotEmpty()) {
-                        // v0.122.0：多仓展开为独立子仓订阅——同步增删后对齐 UI 列表，
-                        // 新增子仓静默自动解析展开（子仓本身又是多仓时 WarehouseSync
-                        // 按 parentUrl 拦截，只展开一层）
-                        val parentEntry = apiGroup.entries.firstOrNull { it.detail == subUrl }
-                        if (parentEntry != null) {
-                            val added = WarehouseSync.syncChildren(
-                                context,
-                                ApiSource(
-                                    parentEntry.name, subUrl, parentEntry.enabled,
-                                    parentEntry.note, parentEntry.group, parentEntry.parentUrl,
-                                ),
-                                cache.warehouses,
-                            )
-                            reloadApiGroup()
-                            added.forEach { parseSubscription(it, quiet = true) }
-                        }
-                        if (!quiet) {
-                            AppToast.show(context, "多仓解析完成：${cache.warehouses.size} 个子仓", long = true)
-                        }
-                        return@onSuccess
-                    }
-                    if (!quiet) {
-                        val ok = cache.sites.count { it.kind != SubSiteStore.KIND_UNSUPPORTED }
-                        val bad = cache.sites.size - ok
-                        AppToast.show(context, "解析完成：${cache.sites.size} 个站点，$ok 个可用" +
-                                if (bad > 0) "，$bad 个不支持" else "", long = true)
-                    }
-                }
-                .onFailure { e ->
-                    if (e is CancellationException) throw e
-                    // v0.46.0：手动刷新失败也记，"已失效" badge 及时更新
-                    SubRefreshStore.recordResult(context, subUrl, false)
-                    if (!quiet) {
-                        AppToast.show(context, "解析失败：${e.message}", long = true)
-                    }
-                }
-            subParsing[subUrl] = false
+        // 刷新本体在 SubscriptionAdder 里（与详情页指针卡片共用入口）；这里只留 UI 态回填。
+        val parentEntry = apiGroup.entries.firstOrNull { it.detail == subUrl }
+        val parent = parentEntry?.let {
+            ApiSource(it.name, it.detail, it.enabled, it.note, it.group, it.parentUrl)
         }
+        SubscriptionAdder.refresh(
+            context = context,
+            subUrl = subUrl,
+            parent = parent,
+            quiet = quiet,
+            onCache = { u, cache -> subCaches[u] = cache },
+            onParsing = { u, parsing -> subParsing[u] = parsing },
+            onChildrenSynced = { reloadApiGroup() },
+        )
     }
 
     /** 设为点播页当前源（v0.108.0：成功后顺手切回主页 tab） */
@@ -1363,25 +1328,26 @@ fun SourcesScreen(
 
     fun addSubscription() {
         val url = urlInput.trim()
-        if (!(url.startsWith("http://") || url.startsWith("https://"))) {
+        // 加订阅走 SubscriptionAdder（与详情页指针卡片共用入口）；非法地址返回 null 置错误态。
+        val source = SubscriptionAdder.addAndRefresh(
+            context, url,
+            name = nameInput.trim().ifBlank { null },
+            note = noteInput.trim(),
+            group = groupInput.trim(),
+            onCache = { u, cache -> subCaches[u] = cache },
+            onParsing = { u, parsing -> subParsing[u] = parsing },
+            onChildrenSynced = { reloadApiGroup() },
+        ) ?: run {
             urlError = true
             return
         }
-        // v0.42.0：名称选填，不填则按域名自动生成
-        val inputName = nameInput.trim()
-        val name = if (inputName.isNotBlank()) inputName else runCatching {
-            url.substringAfter("://").substringBefore("/").substringBefore(":")
-        }.getOrDefault("自定义订阅").ifBlank { "自定义订阅" }
-        apiGroup.entries.add(0, SourceEntry(name, url, note = noteInput.trim(), group = groupInput.trim()))
-        persistApiGroup()
+        apiGroup.entries.add(0, SourceEntry(source.name, source.url, source.enabled, source.note, source.group, source.parentUrl))
         nameInput = ""
         urlInput = ""
         noteInput = ""
         groupInput = ""
         urlError = false
         showAddDialog = false
-        // v0.5.1：新订阅自动解析站点
-        parseSubscription(url)
     }
 
     // v0.27.4：本地源引擎筛选（全部/JS/PY/PHP）

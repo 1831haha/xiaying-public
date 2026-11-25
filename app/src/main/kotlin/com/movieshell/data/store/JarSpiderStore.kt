@@ -105,10 +105,61 @@ object JarSpiderStore {
     }
 
     /**
+     * v1.4.20：http jar 地址改 https（纯函数，可单测）。
+     * 只换 scheme，显式 :80 端口去掉，其余 host/path/query/fragment 原样。
+     * 字符串级手术：URI 七参构造器会把已编码的百分号再编成 %25、把解码后
+     * 的中文原样留下，两种都走样，所以只动 scheme 与末尾端口，不重组 URI。
+     * 非 http 地址或解析失败返回 null。
+     */
+    fun toHttpsUrl(httpUrl: String): String? {
+        val url = httpUrl.trim()
+        if (!url.startsWith("http://", ignoreCase = true)) return null
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        if (!uri.scheme.equals("http", ignoreCase = true) || uri.host == null) return null
+        val rest = url.substring(7) // 去掉 http://
+        val authEnd = rest.indexOfFirst { it == '/' || it == '?' || it == '#' }
+            .takeIf { it >= 0 } ?: rest.length
+        val authority = rest.substring(0, authEnd)
+        val tail = rest.substring(authEnd)
+        // 端口只会出现在 authority 末尾（IPv6 的 ] 之后也一样）；uri.port 已
+        // 确认是 80 时，最后一个冒号就是端口冒号，直接截掉。
+        val fixedAuth = if (uri.port == 80) {
+            val colon = authority.lastIndexOf(':')
+            if (colon >= 0) authority.substring(0, colon) else authority
+        } else {
+            authority
+        }
+        return "https://${fixedAuth}${tail}"
+    }
+
+    /**
+     * v1.4.20：jar 实际下载地址（纯函数，可单测）。
+     * http 地址升级成 https 再下；升级失败返回 null，调用方拒绝下载，
+     * 绝不回落去下 http 的 jar；https 与其他地址原样返回。
+     */
+    fun effectiveJarDownloadUrl(downloadUrl: String): String? {
+        if (downloadUrl.startsWith("http://", ignoreCase = true)) return toHttpsUrl(downloadUrl)
+        return downloadUrl
+    }
+
+    /** v1.4.20：zip 文件头魔数 PK\x03\x04（纯函数，可单测）。jar 本身就是 zip。 */
+    fun isJarMagic(header: ByteArray): Boolean =
+        header.size >= 4 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() &&
+            header[2] == 0x03.toByte() && header[3] == 0x04.toByte()
+
+    /** v1.4.20：文件头 4 字节是不是 zip 魔数（纯 JVM，可单测）。 */
+    fun fileHasJarMagic(file: File): Boolean {
+        if (!file.isFile || file.length() < 4) return false
+        val head = ByteArray(4)
+        val n = runCatching { file.inputStream().use { it.read(head) } }.getOrDefault(-1)
+        return n == 4 && isJarMagic(head)
+    }
+
+    /**
      * 确保 jar 在本地：有缓存直接用，否则下载。
-     * 下载先写同目录临时文件，成功且 md5（有的话）通过后才改名进缓存；
-     * 中途断网/被杀只留临时文件，正式缓存绝不会是半截包。
-     * 必须在 IO 线程调用（同步网络 + 写文件）。
+     * v1.4.20：http 地址先改 https 试一次（只换 scheme，不动订阅 JSON
+     * 本身的下载，也不放宽其他明文策略）；https 拿不到合法 jar 时仍拒绝，
+     * 绝不回落去下 http 的 jar。必须在 IO 线程调用（同步网络 + 写文件）。
      */
     fun ensureJar(context: Context, subUrl: String, jarUrl: String): File? {
         if (jarUrl.isBlank()) return null
@@ -119,10 +170,31 @@ object JarSpiderStore {
         // S3：jar 是要进 DexClassLoader 的可执行代码，md5 也来自同一份订阅，
         // 中间人能同时换 jar 和 md5，所以明文 http 下载一律拒绝，不靠 md5 兜底。
         // 已缓存的旧 jar 不受影响（走 S2 的私有可信副本与摘要复验）。
-        if (downloadUrl.startsWith("http://", ignoreCase = true)) {
+        val effectiveUrl = effectiveJarDownloadUrl(downloadUrl) ?: run {
             LogBus.e(TAG, "jar 明文下载已拒绝（请改用 https 订阅地址）：$downloadUrl")
             return null
         }
+        val f = downloadJar(context, subUrl, jarUrl, effectiveUrl, expectMd5)
+        if (f == null && effectiveUrl != downloadUrl) {
+            LogBus.e(TAG, "jar https 重试失败，仍拒绝明文下载：${downloadUrl}")
+        }
+        return f
+    }
+
+    /**
+     * 从指定地址下载 jar 到缓存。调用方保证地址已是 https 或已处理过升级；
+     * 本函数只下载这一个地址，失败不重试、不回落。
+     * 下载先写同目录临时文件，成功且 zip 魔数与 md5（有的话）通过后才改名进缓存；
+     * 中途断网/被杀只留临时文件，正式缓存绝不会是半截包。
+     * 必须在 IO 线程调用（同步网络 + 写文件）。
+     */
+    private fun downloadJar(
+        context: Context,
+        subUrl: String,
+        jarUrl: String,
+        downloadUrl: String,
+        expectMd5: String?,
+    ): File? {
         return runCatching {
             val req = Request.Builder().url(downloadUrl)
                 .header("User-Agent", DEFAULT_UA_BARE).build()
@@ -144,6 +216,11 @@ object JarSpiderStore {
                     tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
                     if (tmp.length() == 0L) {
                         LogBus.e(TAG, "jar 下载为空：$downloadUrl")
+                        return null
+                    }
+                    // v1.4.20：jar 必须是 zip；非 jar 内容（如 HTML 落地页）直接丢弃不进缓存。
+                    if (!fileHasJarMagic(tmp)) {
+                        LogBus.e(TAG, "jar 内容不是合法 zip，已丢弃：${downloadUrl}")
                         return null
                     }
                     if (expectMd5 != null) {
