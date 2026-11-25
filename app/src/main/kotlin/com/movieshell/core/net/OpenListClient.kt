@@ -1,6 +1,7 @@
 package com.movieshell.core.net
 
 import android.content.Context
+import com.movieshell.core.security.SecurePrefs
 import com.movieshell.data.source.CmsApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -21,8 +22,7 @@ import java.util.Locale
  *
  * 本机服务插件的地址固定为 http://127.0.0.1:5244（见插件包 server.json，
  * OpenList 的端口来自它自己的 config，不走服务插件的自动分配端口）。
- * token 的存法与现有 WebDAV 口径一致：App 私有 SharedPreferences 明文，
- * 与全仓无 EncryptedSharedPreferences 的现状相同，本版不另引加密库；
+ * token 存加密库（SecurePrefs，v1.4.21），明文旧值首次访问时一次性迁移；
  * 用户在 OpenList 网页端改密码后，这里存的旧 token 失效会重新弹登录。
  */
 object OpenListClient {
@@ -75,18 +75,16 @@ object OpenListClient {
     }
 
     fun loadToken(context: Context): String {
-        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_TOKEN, "").orEmpty()
+        SecurePrefs.migrateKeys(context, PREFS, listOf(KEY_TOKEN))
+        return SecurePrefs.getString(context, PREFS, KEY_TOKEN)
     }
 
     fun saveToken(context: Context, token: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_TOKEN, token).apply()
+        SecurePrefs.putString(context, PREFS, KEY_TOKEN, token)
     }
 
     fun clearToken(context: Context) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .remove(KEY_TOKEN).apply()
+        SecurePrefs.removeString(context, PREFS, KEY_TOKEN)
     }
 
     private fun postJson(url: String, token: String, body: JSONObject): JSONObject {

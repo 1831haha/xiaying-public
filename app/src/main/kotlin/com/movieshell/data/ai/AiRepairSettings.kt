@@ -1,14 +1,15 @@
 package com.movieshell.data.ai
 
 import android.content.Context
+import com.movieshell.core.security.SecurePrefs
 
 /**
  * v1.0.9：AI 助手设置（多 provider，不锁死任何一家）。
  *
  * 预置 DeepSeek / 豆包 / 千问 / Kimi / 智谱 / ChatGPT / Claude / Gemini / 自定义，
  * 用户在设置里选一家、填自己的 API Key 与模型。Key 与模型按 provider 分开存，
- * 切 provider 不丢之前填过的 key。Key 只存本机 SharedPreferences，不上传、
- * 不进备份（与 OpenList token 同口径：明文存本机）。
+ * 切 provider 不丢之前填过的 key。Key 只存本机加密库（SecurePrefs，v1.4.21），
+ * 不上传、不进备份；模型与 provider 选择不是凭据，仍存普通 prefs。
  * 国外三家（ChatGPT / Claude / Gemini）在国内网络下可能调不通，需 VPN；
  * 国内优先 DeepSeek 或豆包。豆包的模型填方舟接入点 ID（ep-…）。
  */
@@ -54,15 +55,21 @@ object AiRepairSettings {
         prefs(context).edit().putString(KEY_PROVIDER, id).apply()
     }
 
-    /** API Key 按 provider 分开存，切 provider 不丢之前填过的 key。 */
+    /** API Key 按 provider 分开存，切 provider 不丢之前填过的 key；只进加密库。 */
     fun apiKey(context: Context): String {
+        migrateAllKeys(context)
         val id = provider(context).id
-        return prefs(context).getString("ai_key_$id", "") ?: ""
+        return SecurePrefs.getString(context, PREFS, "ai_key_$id")
     }
 
     fun setApiKey(context: Context, v: String) {
         val id = provider(context).id
-        prefs(context).edit().putString("ai_key_$id", v.trim()).apply()
+        SecurePrefs.putString(context, PREFS, "ai_key_$id", v.trim())
+    }
+
+    /** 9 家 provider 的 key 一次全迁（只跑一次，见 SecurePrefs）；新 key 直接进加密库。 */
+    private fun migrateAllKeys(context: Context) {
+        SecurePrefs.migrateKeys(context, PREFS, PRESETS.map { "ai_key_${it.id}" })
     }
 
     /** 模型按 provider 分开存；没填过就用当前 provider 的默认值（豆包默认空，须填方舟接入点 ID）。 */

@@ -4,6 +4,7 @@ import android.content.Context
 import com.movieshell.core.log.LogBus
 import com.movieshell.core.net.HttpClient
 import com.movieshell.core.net.ioSafe
+import com.movieshell.core.security.SecurePrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -76,22 +77,27 @@ object TmdbClient {
     )
 
     // ---------------- Key 与视图偏好（设置页覆盖用） ----------------
+    // v1.4.21：Key 存加密库（SecurePrefs），明文旧值首次访问时一次性迁移；
+    // 地址与视图偏好不是凭据，仍存普通 prefs。
 
     /** 当前生效的 key：没填过返回空串（海报墙不联网，只显示占位）；存过空串表示用户已清空（不联网）。 */
     fun apiKey(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        return if (prefs.contains(KEY_API_KEY)) prefs.getString(KEY_API_KEY, "").orEmpty() else ""
+        SecurePrefs.migrateKeys(context, PREFS, listOf(KEY_API_KEY))
+        return SecurePrefs.getString(context, PREFS, KEY_API_KEY)
     }
 
     /** 设置页存的原始值：null=没填过，空串=用户已清空。 */
     fun storedApiKey(context: Context): String? {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        return if (prefs.contains(KEY_API_KEY)) prefs.getString(KEY_API_KEY, "").orEmpty() else null
+        SecurePrefs.migrateKeys(context, PREFS, listOf(KEY_API_KEY))
+        return if (SecurePrefs.contains(context, PREFS, KEY_API_KEY)) {
+            SecurePrefs.getString(context, PREFS, KEY_API_KEY)
+        } else {
+            null
+        }
     }
 
     fun setApiKey(context: Context, key: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_API_KEY, key.trim()).apply()
+        SecurePrefs.putString(context, PREFS, KEY_API_KEY, key.trim())
     }
 
     /** 海报墙视图偏好（默认列表，记住选择）。 */

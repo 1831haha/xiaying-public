@@ -14,8 +14,8 @@ android {
         applicationId = "com.movieshell"
         minSdk = 26
         targetSdk = 34
-        versionCode = 542
-        versionName = "1.4.20"
+        versionCode = 543
+        versionName = "1.4.21"
 
         // v1.1.25：阿里云盘开放平台应用凭证——构建期注入，仓库不许出现凭证明文。
         // 未配置时为空串，阿里扫码入口给明确提示；CI 里由 secrets 注入环境变量。
@@ -153,6 +153,11 @@ dependencies {
 
     // 网页源嗅探：Service Worker 上下文拦截（androidx.webkit 1.5.0+ 引入 SW shouldInterceptRequest）
     implementation("androidx.webkit:webkit:1.10.0")
+
+    // v1.4.21：凭据加密存储——EncryptedSharedPreferences（MasterKey AES256_GCM，
+    // minSdk 23+，本项目 minSdk 26 可用）。1.1.0-alpha06 是末版未废弃这些 API
+    // 的版本；1.1.0 稳定版已把 EncryptedSharedPreferences/MasterKey 标记废弃。
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // 图片加载（v0.12.1：海报真实图片）
     implementation("io.coil-kt:coil-compose:2.6.0")

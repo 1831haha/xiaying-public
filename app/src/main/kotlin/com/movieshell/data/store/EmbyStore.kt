@@ -1,6 +1,7 @@
 package com.movieshell.data.store
 
 import android.content.Context
+import com.movieshell.core.security.SecurePrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
@@ -10,6 +11,8 @@ import java.util.UUID
 
 /**
  * v1.1.31：Emby / Jellyfin 服务器配置持久化（本机 SharedPreferences + JSON，只存本机）。
+ * v1.4.21：servers_json 整串进加密库（SecurePrefs，串里含各台的 token），
+ * 明文旧值首次加载时一次性迁移；device_id 与 active_server_id 不是凭据，仍存普通 prefs。
  *
  * 一台服务器一条记录：地址 + 类型 + 登录方式 + 登录后拿到的 token/userId。
  * token 只作本机直连用（请求头 X-Emby-Token / 播放地址 api_key 参数），不上传、不分享。
@@ -65,7 +68,9 @@ object EmbyStore {
     fun ensureLoaded(context: Context) {
         if (loaded) return
         loaded = true
-        val raw = prefs(context).getString(KEY_SERVERS, null) ?: return
+        SecurePrefs.migrateKeys(context, PREFS, listOf(KEY_SERVERS))
+        val raw = SecurePrefs.getString(context, PREFS, KEY_SERVERS)
+        if (raw.isBlank()) return
         _servers.value = runCatching { json.decodeFromString<List<EmbyServer>>(raw) }.getOrDefault(emptyList())
     }
 
@@ -89,9 +94,12 @@ object EmbyStore {
 
     private fun persist(context: Context, list: List<EmbyServer>) {
         _servers.value = list
-        prefs(context).edit()
-            .putString(KEY_SERVERS, json.encodeToString(ListSerializer(EmbyServer.serializer()), list))
-            .apply()
+        SecurePrefs.putString(
+            context,
+            PREFS,
+            KEY_SERVERS,
+            json.encodeToString(ListSerializer(EmbyServer.serializer()), list),
+        )
     }
 
     fun add(context: Context, server: EmbyServer) {

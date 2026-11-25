@@ -3,14 +3,18 @@ package com.movieshell.data.sharelink
 import android.content.Context
 import android.webkit.CookieManager
 import com.movieshell.core.log.LogBus
+import com.movieshell.core.security.SecurePrefs
+import com.movieshell.core.security.netdiskCookieKey
+import com.movieshell.core.security.netdiskTokenKey
 import java.io.File
 
 /**
  * v1.3.5：分享链接播放的登录态存储（照搬 v1.1.31 砍盘前 PanCookieFile /
  * PanTokenFile 的落盘位置与口径，手机里 1.1.30 留下的登录文件能直接续用）。
  *
- * 夸克/UC/百度存 Cookie：filesDir/<dir>/cookie.txt，另加一个 expired
- * 空文件当“登录已过期”标记；阿里/光鸭/迅雷存 token：filesDir/<dir>/token.json。
+ * v1.4.21：Cookie/token 改存加密库（SecurePrefs，按盘分 key），老文件
+ * 只作一次性迁移源——首次读到时写进加密库、校验通过后删文件；1.1.30
+ * 留下的登录文件同样能续用（读时迁移）。expired 标记仍是普通空文件。
  * 只存 Cookie/token，不存账号密码；值绝不写进日志。
  */
 object ShareAuth {
@@ -133,18 +137,39 @@ internal object CookieStore {
 
     private fun expiredFile(dirName: String): File? = dir(dirName)?.let { File(it, EXPIRED_NAME) }
 
+    /** 读老文件（v1.4.21 前的存法）：没有文件返回 null，供迁移时区分“没存过”。 */
+    private fun readCookieFile(dirName: String): String? {
+        val f = cookieFile(dirName) ?: return null
+        if (!f.isFile) return null
+        return runCatching { f.readText().trim() }.getOrDefault(null)
+    }
+
     fun getCookie(dirName: String): String {
-        val f = cookieFile(dirName) ?: return ""
-        if (!f.isFile) return ""
-        return runCatching { f.readText().trim() }.getOrDefault("")
+        val ctx = appContext ?: return ""
+        return SecurePrefs.getStringWithFileMigration(
+            ctx,
+            netdiskCookieKey(dirName),
+            readLegacy = { readCookieFile(dirName) },
+            deleteLegacy = { cookieFile(dirName)?.delete() },
+        )
     }
 
     fun hasCookie(dirName: String): Boolean = getCookie(dirName).isNotBlank()
 
     fun saveCookie(dirName: String, cookie: String): Boolean {
-        val f = cookieFile(dirName) ?: return false
         val v = cookie.trim()
         if (v.isBlank()) return false
+        val ctx = appContext
+        if (ctx != null && SecurePrefs.putStringDroppingLegacy(ctx, netdiskCookieKey(dirName), v) {
+                cookieFile(dirName)?.delete()
+            }
+        ) {
+            expiredFile(dirName)?.delete()
+            LogBus.i(TAG, "${dirName} 登录态已保存")
+            return true
+        }
+        // 加密库不可用：回落老文件（旧行为）。
+        val f = cookieFile(dirName) ?: return false
         return runCatching {
             f.writeText(v)
             expiredFile(dirName)?.delete()
@@ -154,6 +179,8 @@ internal object CookieStore {
     }
 
     fun clear(dirName: String): Boolean {
+        val ctx = appContext
+        if (ctx != null) SecurePrefs.removeEncrypted(ctx, netdiskCookieKey(dirName))
         val f = cookieFile(dirName) ?: return false
         return runCatching {
             if (f.exists()) f.delete()
@@ -189,18 +216,38 @@ internal object TokenStore {
 
     private fun tokenFile(dirName: String): File? = dir(dirName)?.let { File(it, FILE_NAME) }
 
+    /** 读老文件（v1.4.21 前的存法）：没有文件返回 null，供迁移时区分“没存过”。 */
+    private fun readTokenFile(dirName: String): String? {
+        val f = tokenFile(dirName) ?: return null
+        if (!f.isFile) return null
+        return runCatching { f.readText().trim() }.getOrDefault(null)
+    }
+
     fun getTokenJson(dirName: String): String {
-        val f = tokenFile(dirName) ?: return ""
-        if (!f.isFile) return ""
-        return runCatching { f.readText().trim() }.getOrDefault("")
+        val ctx = appContext ?: return ""
+        return SecurePrefs.getStringWithFileMigration(
+            ctx,
+            netdiskTokenKey(dirName),
+            readLegacy = { readTokenFile(dirName) },
+            deleteLegacy = { tokenFile(dirName)?.delete() },
+        )
     }
 
     fun hasToken(dirName: String): Boolean = getTokenJson(dirName).isNotBlank()
 
     fun saveTokenJson(dirName: String, json: String): Boolean {
-        val f = tokenFile(dirName) ?: return false
         val v = json.trim()
         if (v.isBlank()) return false
+        val ctx = appContext
+        if (ctx != null && SecurePrefs.putStringDroppingLegacy(ctx, netdiskTokenKey(dirName), v) {
+                tokenFile(dirName)?.delete()
+            }
+        ) {
+            LogBus.i(TAG, "${dirName} 登录态已保存")
+            return true
+        }
+        // 加密库不可用：回落老文件（旧行为）。
+        val f = tokenFile(dirName) ?: return false
         return runCatching {
             f.writeText(v)
             LogBus.i(TAG, "${dirName} 登录态已保存")
@@ -209,6 +256,8 @@ internal object TokenStore {
     }
 
     fun clear(dirName: String): Boolean {
+        val ctx = appContext
+        if (ctx != null) SecurePrefs.removeEncrypted(ctx, netdiskTokenKey(dirName))
         val f = tokenFile(dirName) ?: return false
         return runCatching {
             if (f.exists()) f.delete()

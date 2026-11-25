@@ -3,6 +3,7 @@ package com.movieshell.data.sync
 import android.content.Context
 import com.movieshell.core.log.LogBus
 import com.movieshell.core.net.WebDavClient
+import com.movieshell.core.security.SecurePrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
@@ -23,8 +24,8 @@ import java.util.Locale
  *   返回 Conflict，由设置页对话框请用户确认是否仍要覆盖。
  * - WebDAV 地址校验：只放行 https；http 仅在用户勾选风险确认且地址
  *   为局域网地址时放行，勾选状态持久化；非法地址不保存。
- * - 密码仍存普通 SharedPreferences（见下）：全仓无 EncryptedSharedPreferences
- *   依赖与用法，凭空加未验证依赖不在本组做，记为延期。
+ * - 密码存加密库（SecurePrefs，v1.4.21）：明文旧值首次访问时一次性
+ *   迁进加密库，地址/用户名/局域网勾选仍存普通 prefs。
  */
 object CloudSyncManager {
     private const val PREFS = "cloud_sync_prefs"
@@ -36,10 +37,8 @@ object CloudSyncManager {
     private const val REMOTE_NAME = "movieshell_backup.json"
     private const val DIGEST_SUFFIX = ".sha256"
 
-    // v0.186.0 延期：WebDAV 密码仍存普通 prefs。迁移到 EncryptedSharedPreferences
-    // 需要先引入并验证 androidx.security 依赖，本组禁改 build.gradle.kts 且全仓
-    // 无现成用法，故不凭空加依赖；密码明文风险由地址校验收敛（https，或
-    // 局域网 http + 用户显式勾选），彻底解决等依赖落地后再迁移。
+    // v1.4.21：密码已迁加密库（SecurePrefs），见 getConfig/saveConfig；
+    // v0.186.0 记的“等依赖落地后再迁移”即本处。
     data class Config(
         val url: String,
         val user: String,
@@ -54,11 +53,12 @@ object CloudSyncManager {
     }
 
     fun getConfig(context: Context): Config {
+        SecurePrefs.migrateKeys(context, PREFS, listOf(KEY_PASS))
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return Config(
             url = p.getString(KEY_URL, "").orEmpty(),
             user = p.getString(KEY_USER, "").orEmpty(),
-            pass = p.getString(KEY_PASS, "").orEmpty(),
+            pass = SecurePrefs.getString(context, PREFS, KEY_PASS),
             allowLanHttp = p.getBoolean(KEY_ALLOW_LAN_HTTP, false),
         )
     }
@@ -78,9 +78,10 @@ object CloudSyncManager {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_URL, url.trim())
             .putString(KEY_USER, user.trim())
-            .putString(KEY_PASS, pass)
             .putBoolean(KEY_ALLOW_LAN_HTTP, allowLanHttp)
             .apply()
+        // 密码只进加密库，不进普通 prefs。
+        SecurePrefs.putString(context, PREFS, KEY_PASS, pass)
         return true
     }
 
