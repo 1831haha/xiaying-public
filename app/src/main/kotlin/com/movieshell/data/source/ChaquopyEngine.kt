@@ -29,9 +29,14 @@ import kotlinx.serialization.json.jsonObject
 /**
  * Chaquopy 内置 Python 引擎。
  *
- * - init(context)：Application 级调用一次（MainActivity.onCreate），只存 applicationContext。
+ * - init(context)：Application 级调用一次，只存 applicationContext，
+ *   不启动解释器、不碰 Python，零成本；WorkManager 单独拉起的进程
+ *   也靠它（见 XiaYingApp）。
  * - Python 解释器懒启动：第一次真正调用 PY 规则时才 Python.start()，
  *   绝不在 Application.onCreate 里启动，避免拖慢冷启动。
+ *   v1.4.22（轨道 7）：启动后台预热 warmup() 已删，python() 是唯一
+ *   启动点——首个 PY 调用的那一次付 Python.start() 约 1–2 秒 +
+ *   依赖自检的开销，之后全局复用。
  * - 所有调用切到 Dispatchers.IO，桥本身是同步的 Java 接口。
  */
 object ChaquopyEngine : PyEngine {
@@ -181,6 +186,12 @@ object ChaquopyEngine : PyEngine {
     /**
      * v0.27.2：加锁。之前未加锁，并发协程可能同时通过 isStarted 检查、
      * 各调一次 Python.start()，真机报过 "Python already started"。
+     * v1.4.22（轨道 7）：失败与重试语义——Python.start() 抛错时原样上抛，
+     * Python.isStarted() 仍为 false，下次使用可再触发启动，不锁死；
+     * 各入口已归一：invoke/bookInvoke 经 callBridge 转成
+     * {"ok":false,"error":...}，reset 类只记日志，resolveYtGeneric 交空串。
+     * appContext 未设时抛 IllegalStateException（正常进程里
+     * Application.onCreate 已调 init()，见 XiaYingApp）。
      */
     @Synchronized
     private fun python(): Python {
@@ -220,18 +231,6 @@ object ChaquopyEngine : PyEngine {
      * v0.27.7：取 PY 包版本号（拿不到就 "unknown"，不抛）。
      * importlib.metadata 在 Chaquopy 下可能取不到子模块，包一层 runCatching。
      */
-    /**
-     * v0.294.46：PY 解释器预热（后台调用，不抛）。Application 启动时在 IO 线程跑一次，
-     * 把 Python.start() 约 1–2 秒的启动费从首个 PY 源的首屏里挪到启动后台；
-     * 之后第一次 homeContent 不用再等解释器启动，只剩站点网络时间。
-     * 已启动时 python() 直接返回，不重复启动。
-     */
-    fun warmup() {
-        runCatching { python() }
-            .onSuccess { Log.i(TAG, "PY 解释器预热完成") }
-            .onFailure { Log.w(TAG, "PY 解释器预热失败（首个 PY 源调用时再启动）", it) }
-    }
-
     private fun pyPkgVersion(py: Python, name: String): String = runCatching {
         py.getModule("importlib.metadata")?.callAttr("version", name)?.toString()
             ?: "unknown"

@@ -16,6 +16,8 @@ import com.movieshell.domain.model.isSubSite
 import com.movieshell.data.source.ChaquopyEngine
 import com.movieshell.data.source.DrpyEngine
 import com.movieshell.data.source.PyApi
+import com.movieshell.data.source.SourceRiskGate
+import com.movieshell.data.source.SourceSandbox
 import com.movieshell.data.source.RuleImportExpander
 import com.movieshell.data.source.V8DrpyEngine
 import kotlinx.coroutines.sync.Mutex
@@ -82,7 +84,20 @@ object SubSiteEngines {
             Log.w(TAG, "drpy 站规则信任校验失败，拒绝执行: ${site.key}")
             return EmptyDrpyEngine
         }
-        return PooledDrpyEngine(site.key, trusted)
+        // v1.4.22 轨道 8：高危源首次执行前二次确认——未确认的高危源不
+        // 执行（空引擎 + 失败原因，聚合搜索里计入失败源）；已确认的
+        // 把派生白名单带进引擎，JS 联网只限这些域名。
+        val decision = SourceRiskGate.decisionFor(requireContext(), site.key, trusted)
+        if (decision.blocked) {
+            Log.w(TAG, "drpy 站高危待确认，拒绝执行: ${site.key}")
+            return BlockedDrpyEngine(site.name)
+        }
+        // v1.4.22 GPT P1-1：池 key 必须绑规则内容 SHA——decision 里
+        // 的 SHA 就是确认记录用的那份；扫不到（超 4MB/读不到）时
+        // decision 没带 SHA，直接对可信副本再算一份，同一份内容
+        // 同一份 SHA，兜底不走“无 SHA 复用旧引擎”的老路。
+        val ruleSha = decision.ruleSha256 ?: ExecutableTrust.sha256(trusted)
+        return PooledDrpyEngine(site.key, trusted, decision.sandbox, ruleSha)
     }
 
     /**
@@ -109,6 +124,12 @@ object SubSiteEngines {
             Log.w(TAG, "PY 站规则信任校验失败，拒绝执行: ${site.key}")
             return EmptyDrpyEngine
         }
+        // v1.4.22 轨道 8：与 drpy 同款执行时关卡。PY 运行时没有按源
+        // 拦截联网的口子，白名单只记录、不强制（见 SourceRiskGate）。
+        if (SourceRiskGate.decisionFor(requireContext(), site.key, trusted).blocked) {
+            Log.w(TAG, "PY 站高危待确认，拒绝执行: ${site.key}")
+            return BlockedDrpyEngine(site.name)
+        }
         return SubPyEngine(trusted.absolutePath)
     }
 
@@ -132,6 +153,12 @@ object SubSiteEngines {
                 allowRetrust = false,
             )
         }.getOrNull() ?: return empty
+        // v1.4.22 轨道 8：播放旁路同样过关卡——playRaw 不走 pyEngineFor，
+        // 不在这里拦，高危源点播就能绕过首页的确认。
+        if (SourceRiskGate.decisionFor(requireContext(), site.key, trusted).blocked) {
+            Log.w(TAG, "PY 站高危待确认，拒绝播放: ${site.key}")
+            return empty
+        }
         return runCatching { PyApi(ChaquopyEngine).play(trusted.absolutePath, flag, id, vipFlags) }
             .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             .getOrDefault(empty)
@@ -151,12 +178,32 @@ private object EmptyDrpyEngine : DrpyEngine {
 }
 
 /**
+ * v1.4.22 轨道 8：高危待确认的空引擎——与 EmptyDrpyEngine 的区别是
+ * 带失败原因：SiteRepository.recordEngineFailureIfEmpty 读到它后把
+ * 原因记进按站失败 map，首页空态/聚合搜索失败汇总能据此告诉用户
+ * “这个源不是没数据，是等你确认”，而不是静默空白。
+ */
+private class BlockedDrpyEngine(private val siteName: String) : DrpyEngine {
+    override val lastError: String? = "高危源待确认：$siteName，首次执行需用户确认"
+    override fun loadRule(js: String) {}
+    override suspend fun home(): List<Vod> = emptyList()
+    override suspend fun categories(): List<CategoryType> = emptyList()
+    override suspend fun category(tid: String, pg: Int, filter: Map<String, String>): List<Vod> = emptyList()
+    override suspend fun detail(id: String): VodDetail = VodDetail(vodId = id)
+    override suspend fun search(wd: String): List<Vod> = emptyList()
+    override suspend fun play(flag: String, id: String): String = ""
+    override fun release() {}
+}
+
+/**
  * 订阅 drpy 站的引擎适配器：每次调用都经 SubDrpyPool 拿到该站的
  * V8DrpyEngine（已载入该站规则）再执行；池负责复用与 LRU 淘汰。
  */
 private class PooledDrpyEngine(
     private val siteKey: String,
     private val ruleFile: File,
+    private val sandbox: SourceSandbox? = null,
+    private val ruleSha256: String? = null,
 ) : DrpyEngine {
     // v0.217.0（F53）：透传池内引擎的失败原因——原来适配器没覆写
     // lastError，订阅 drpy 站失败时桥接读到的恒为 null，失败统计里
@@ -165,48 +212,61 @@ private class PooledDrpyEngine(
     private var lastSeenError: String? = null
     override val lastError: String? get() = lastSeenError
 
+    // v1.4.22 轨道 8：池 key 带沙箱白名单指纹——确认前后白名单变了，
+    // 旧池化引擎（无沙箱）不能继续复用；新 key 建新引擎，旧条目
+    // 由 LRU 淘汰（在途调用仍跑完，不中途关引擎）。
+    // v1.4.22 GPT P1-1：只绑白名单不够——规则改了、白名单没变，
+    // 旧池化引擎（已加载旧规则）会被取出复用，用户确认的却是
+    // 新规则。池 key 改走 drpyPoolKey：源 key + 规则内容 SHA-256
+    //（就是确认记录 consent:siteKey:sha256 用的那份）+ 白名单
+    // 稳定指纹；SHA 变了必建新引擎。
+    private val poolKey: String get() = drpyPoolKey(siteKey, ruleSha256, sandbox?.allowedHosts)
+
+    private suspend fun <T> withPooledEngine(block: suspend (DrpyEngine) -> T): T =
+        SubDrpyPool.withEngine(poolKey, ruleFile, sandbox, block)
+
     override fun loadRule(js: String) {
         // 规则按站预载，不支持外部直接 load
     }
 
     override suspend fun home(): List<Vod> =
-        SubDrpyPool.withEngine(siteKey, ruleFile) { eng ->
+        withPooledEngine { eng ->
             eng.home().also { lastSeenError = eng.lastError }
         }
 
     override suspend fun categories(): List<CategoryType> =
-        SubDrpyPool.withEngine(siteKey, ruleFile) { eng ->
+        withPooledEngine { eng ->
             eng.categories().also { lastSeenError = eng.lastError }
         }
 
     override suspend fun category(tid: String, pg: Int, filter: Map<String, String>): List<Vod> =
-        SubDrpyPool.withEngine(siteKey, ruleFile) { eng ->
+        withPooledEngine { eng ->
             eng.category(tid, pg, filter).also { lastSeenError = eng.lastError }
         }
 
     override suspend fun filters(tid: String): List<FilterGroup> =
-        SubDrpyPool.withEngine(siteKey, ruleFile) { eng ->
+        withPooledEngine { eng ->
             eng.filters(tid).also { lastSeenError = eng.lastError }
         }
 
     override suspend fun detail(id: String): VodDetail =
-        SubDrpyPool.withEngine(siteKey, ruleFile) { eng ->
+        withPooledEngine { eng ->
             eng.detail(id).also { lastSeenError = eng.lastError }
         }
 
     override suspend fun search(wd: String): List<Vod> =
-        SubDrpyPool.withEngine(siteKey, ruleFile) { eng ->
+        withPooledEngine { eng ->
             eng.search(wd).also { lastSeenError = eng.lastError }
         }
 
     override suspend fun play(flag: String, id: String): String =
-        SubDrpyPool.withEngine(siteKey, ruleFile) { eng ->
+        withPooledEngine { eng ->
             eng.play(flag, id).also { lastSeenError = eng.lastError }
         }
 
     // v0.294.7（H2）：池内引擎完整结果透传
     override suspend fun playRaw(flag: String, id: String): com.movieshell.domain.model.RawPlay =
-        SubDrpyPool.withEngine(siteKey, ruleFile) { eng ->
+        withPooledEngine { eng ->
             eng.playRaw(flag, id).also { lastSeenError = eng.lastError }
         }
 
@@ -239,15 +299,16 @@ private object SubDrpyPool {
     private val engines = LinkedHashMap<String, PooledEntry>()
 
     suspend fun <T> withEngine(
-        siteKey: String,
+        poolKey: String,
         ruleFile: File,
+        sandbox: SourceSandbox?,
         block: suspend (DrpyEngine) -> T,
     ): T {
         semaphore.acquire()
         var entry: PooledEntry? = null
         try {
             entry = mutex.withLock {
-                val cached = engines.remove(siteKey)
+                val cached = engines.remove(poolKey)
                 val e = cached ?: run {
                     if (engines.size >= MAX_ENGINES) {
                         val victim = engines.entries.firstOrNull { it.value.inFlight.get() == 0 }
@@ -260,7 +321,7 @@ private object SubDrpyPool {
                         }
                     }
                     PooledEntry(
-                        V8DrpyEngine(SubSiteEngines.requireContext()).also { eng ->
+                        V8DrpyEngine(SubSiteEngines.requireContext(), sandbox).also { eng ->
                             // S2：规则正文已是可信副本，import 也从可信副本展开，
                             // 不再让引擎回公开 js 目录读 import 文件。展开后已无
                             // import 语句，引擎自己的公开目录展开是空操作。
@@ -292,7 +353,7 @@ private object SubDrpyPool {
                         },
                     )
                 }
-                engines[siteKey] = e
+                engines[poolKey] = e
                 e.inFlight.incrementAndGet()
                 e
             }

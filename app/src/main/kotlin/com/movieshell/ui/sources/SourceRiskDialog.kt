@@ -33,16 +33,27 @@ fun SourceRiskDialog(
     report: SourceRiskScanner.Report,
     onDismissRequest: () -> Unit,
     onConfirm: () -> Unit,
+    /**
+     * v1.4.22 轨道 8：执行时二次确认复用本弹窗（首页高危源首次执行）。
+     * 默认值 = 导入时口径（三个旧调用点不动）；执行时传 title="该源有
+     * 高危风险"、confirmText="确认执行"、footerNote=执行口径说明、
+     * allowedHosts=确认后放行的白名单域名。确认 = 在白名单内执行，
+     * 不是“放行一切”——弹窗里必须让用户看到这个区别。
+     */
+    title: String = "该源有高危风险",
+    confirmText: String = "仍要导入",
+    footerNote: String? = null,
+    allowedHosts: List<String> = emptyList(),
 ) {
     val highCount = report.findings.count { it.severity == SourceRiskScanner.Severity.HIGH }
     val mediumCount = report.findings.size - highCount
     TechDialog(
         onDismissRequest = onDismissRequest,
-        title = "该源有高危风险",
+        title = title,
         // v1.3.33：风险条目长列表走宽松模式。
         compact = false,
         subtitle = fileName,
-        confirmText = "仍要导入",
+        confirmText = confirmText,
         confirmDanger = true,
         onConfirm = onConfirm,
         scrollable = false,
@@ -88,8 +99,20 @@ fun SourceRiskDialog(
             }
         }
         Spacer(Modifier.height(12.dp))
+        if (allowedHosts.isNotEmpty()) {
+            val shown = allowedHosts.sorted().take(8)
+            val rest = allowedHosts.size - shown.size
+            Text(
+                text = "确认后仅允许访问：" + shown.joinToString("、") +
+                    if (rest > 0) " 等 ${allowedHosts.size} 个域名" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
         Text(
-            text = "只按对手机有无危害判：读通讯录/短信/位置、联网外发、执行代码、装东西才算风险。来源可信可点“仍要导入”。",
+            text = footerNote
+                ?: "只按对手机有无危害判：读通讯录/短信/位置、联网外发、执行代码、装东西才算风险。来源可信可点“仍要导入”。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

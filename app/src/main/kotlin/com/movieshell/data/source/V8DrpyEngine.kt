@@ -39,8 +39,8 @@ import java.util.zip.GZIPInputStream
  * A1–A5 根治：
  * - A1/A2：每引擎一个 [JsSession]（V8 isolate），`request()` 在 JS 侧返回 Promise，
  *   宿主网络请求经 MessagePort RPC 在 IO 协程执行——JS 线程零阻塞，无共享单线程瓶颈。
- * - A4：[JsSession.eval] 带硬截止，超时直接 close isolate 真正终止脚本（V8 isolate
- *   跑在 WebView 提供的独立进程，死循环不会卡宿主线程）。
+ * - A4：[JsSession.eval] 带硬截止，超时标失效、1 秒宽限后 close isolate 回收，真正终止脚本
+ *   （V8 isolate 跑在 WebView 提供的独立进程，死循环不会卡宿主线程）。
  * - A5：release 即时 close isolate，在途 evaluate 以 IsolateTerminatedException 立即失败。
  *
  * JS 环境：assets/jsbridge/host.js（RPC 基元）+ drpy/shim.js（async 垫片）+ 规则源码。
@@ -49,6 +49,15 @@ import java.util.zip.GZIPInputStream
  */
 class V8DrpyEngine(
     context: Context,
+    /**
+     * v1.4.22 轨道 8：源执行沙箱参数（白名单式网络域名范围）。
+     * null = 不限制（默认，老行为）。非空时 [doRequest] 只放行白名单
+     * 域名——JS 联网全走宿主 RPC 到这里，是唯一的 choke 点；规则
+     * 图片等不走引擎的请求不受影响。注意这是域名白名单，不是
+     * 完整沙箱：JS 隔离本身仍靠 isolate，与 SourceRiskScanner 的
+     * 启发式扫描一样，都不是“防一切恶意代码”的安全边界。
+     */
+    private val sandbox: SourceSandbox? = null,
 ) : DrpyEngine {
 
     private val appContext = context.applicationContext
@@ -535,6 +544,14 @@ class V8DrpyEngine(
         // v1.1.6 反爬吸收项：同域限速/退避（只在配了间隔或 403/429 罚过后才延迟，
         // 平时零开销）；放预算计算之前，睡完再算剩余预算，预算才准。
         val host = runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
+        // v1.4.22 轨道 8：白名单拦截放在限速之前——被拦的请求不计数、
+        // 不进退避；日志只记 host，不打完整 URL（可能带 token）。
+        // 注意：OkHttp 跟随的重定向不重检，白名单只管首次请求的域名。
+        if (sandbox != null && !sandbox.allows(host)) {
+            LogBus.w(TAG, "沙箱拦截：域名不在白名单 host=$host")
+            lastError = "沙箱拦截：域名不在白名单 host=$host"
+            return ""
+        }
         SourceThrottle.throttle(host)
         // v0.257.0：预算内发起。剩余预算小于等于 0 直接回空串，不发起请求；
         // 剩余不足单请求上限时派生一个整 call 上限等于剩余预算的 client

@@ -114,21 +114,26 @@ class ParseApi(
         if (parses.isEmpty() || videoUrl.isBlank()) return@withContext null
         val usable = parses.filter { it.url.isNotBlank() || it.type == 99 }
         if (usable.isEmpty()) return@withContext null
-        val cacheKey = ParseCache.key(videoUrl, usable.map { it.url })
+        // v1.4.22：`{key}` 模板未填 key 的线路直接跳过（不发请求、不计失败、
+        // 不进缓存键）；其余线路照常用。模板地址本身就是业务主键，缓存/
+        // 熔断/统计一律按模板记，解析出的地址绝不含 key。
+        val keyed = usable.filter { ParseStore.resolveLineUrl(it, context) != null }
+        if (keyed.isEmpty()) return@withContext null
+        val cacheKey = ParseCache.key(videoUrl, keyed.map { it.url })
         ParseCache.get(cacheKey)?.let { c ->
             LogBus.i(TAG, "解析缓存命中（${c.line}）：${c.url.take(100)}")
             if (c.headers.isNotEmpty()) SniffPlayHeaders.put(c.url, c.headers)
             return@withContext ParseHit(c.url, c.headers, c.line)
         }
-        val notTripped = usable.filterNot { ParseStore.isTripped(it.url) }
+        val notTripped = keyed.filterNot { ParseStore.isTripped(it.url) }
         // 全部熔断时不至于一条都不试：退回全部线路（熔断只是排序提示）
-        val pool = notTripped.ifEmpty { usable }
+        val pool = notTripped.ifEmpty { keyed }
         val ordered = PlayRouting.orderLines(pool, flag, { it.flags }, { ParseStore.score(it.url) })
         // v1.2.8：上次给这片回了死链的线路先跳过（播失败时记的）；全跳光了就照常用全部，
         // 不留空——死线也可能只是当时那一下不行。
         val dead = ParseDeadLines.deadLinesFor(videoUrl)
         val raceLines = withoutDeadLines(ordered, dead).ifEmpty { ordered }
-        LogBus.i(TAG, "开始解析：${raceLines.size} 条线路（跳过熔断 ${usable.size - notTripped.size}，跳过记死 ${ordered.size - raceLines.size}），url=$videoUrl")
+        LogBus.i(TAG, "开始解析：${raceLines.size} 条线路（跳过未填 key ${usable.size - keyed.size}，跳过熔断 ${keyed.size - notTripped.size}，跳过记死 ${ordered.size - raceLines.size}），url=$videoUrl")
         val session = if (showProgress) ParseProgressBus.begin(raceLines) else null
         val hit = try {
             if (session == null) {
@@ -220,13 +225,17 @@ class ParseApi(
         session: ParseProgressBus.Session?,
         longer: Boolean = false,
     ): ParseHit? {
+        // v1.4.22：`{key}` 模板未填 key 的线不跑、不计失败（正常应已被
+        // parseDetailed 的 keyed 过滤拦住；这里是指定线路 Pick 的兜底）。
+        if (ParseStore.resolveLineUrl(p, context) == null) return null
         session?.let { if (!longer) ParseProgressBus.onLineStart(it, p) }
         val t0 = System.currentTimeMillis()
         val hit = try {
             when {
-                isJsonType(p) -> withTimeoutOrNull(if (longer) JSON_TIMEOUT_MS * 2 else JSON_TIMEOUT_MS) { parseJson(p, videoUrl) }
+                isJsonType(p) -> withTimeoutOrNull(if (longer) JSON_TIMEOUT_MS * 2 else JSON_TIMEOUT_MS) { parseJson(p, videoUrl, context) }
                 p.type == 0 -> if (context == null) null else {
-                    val target = p.url.trim() + URLEncoder.encode(videoUrl, Charsets.UTF_8.name())
+                    val base = ParseStore.resolveLineUrl(p, context) ?: return null
+                    val target = base.trim() + URLEncoder.encode(videoUrl, Charsets.UTF_8.name())
                     AutoSniffer.sniff(
                         context, target, p.header,
                         timeoutMs = if (longer) SniffConfig.autoSniffTimeoutMs * 2 else SniffConfig.autoSniffTimeoutMs,
@@ -287,7 +296,9 @@ class ParseApi(
         // v0.294.7（L5）：嗅探线路有 Context 时做一次真实嗅探（样片地址，≤20 秒）——
         // 原来只看解析页 HTTP 200，页面活着但解析不出也算“可用”。
         if (parse.type == 0 && context != null && parse.url.isNotBlank()) {
-            val target = parse.url.trim() + URLEncoder.encode(PROBE_SAMPLE_URL, Charsets.UTF_8.name())
+            // v1.4.22：`{key}` 模板未填 key 时不发请求，直接判不通（设置页另行提示填 key）。
+            val base = ParseStore.resolveLineUrl(parse, context) ?: return false
+            val target = base.trim() + URLEncoder.encode(PROBE_SAMPLE_URL, Charsets.UTF_8.name())
             val hit = runCatching {
                 AutoSniffer.sniff(context, target, parse.header, timeoutMs = 20_000L, label = "测活「${parse.name}」")
             }.onFailure { if (it is CancellationException) throw it }.getOrNull()
@@ -299,7 +310,8 @@ class ParseApi(
             withTimeoutOrNull(10_000L) {
                 when (parse.type) {
                     1 -> {
-                        val base = parse.url.trim()
+                        // v1.4.22：`{key}` 模板未填 key 时不发请求，直接判不通。
+                        val base = ParseStore.resolveLineUrl(parse, context) ?: return@withTimeoutOrNull false
                         if (base.isBlank()) return@withTimeoutOrNull false
                         val full = base + URLEncoder.encode(
                             "https://v.qq.com/x/cover/test.html", Charsets.UTF_8.name()
@@ -318,7 +330,8 @@ class ParseApi(
                         }
                     }
                     else -> {
-                        val base = parse.url.trim()
+                        // v1.4.22：`{key}` 模板未填 key 时不发请求，直接判不通。
+                        val base = ParseStore.resolveLineUrl(parse, context) ?: return@withTimeoutOrNull false
                         if (base.isBlank()) return@withTimeoutOrNull false
                         val builder = Request.Builder().url(base).get()
                         executeCancellable(client.newCall(builder.build())).use { resp ->
@@ -336,11 +349,13 @@ class ParseApi(
 
     /**
      * JSON 线路：GET `parse.url + urlencode(videoUrl)`，带 parse.header；
-     * 结果取地址与请求头（[extractHit]）。
+     * 结果取地址与请求头（[extractHit]）。`{key}` 模板未填 key 时不发请求，
+     * 返回 null（调用方 tryLine 不计失败）；含 key 的请求地址只在本次
+     * 调用内使用，不记日志、不进熔断/统计键。
      */
-    private suspend fun parseJson(parse: ParseConfig, videoUrl: String): ParseHit? =
+    private suspend fun parseJson(parse: ParseConfig, videoUrl: String, context: Context? = null): ParseHit? =
         withContext(Dispatchers.IO) {
-            val base = parse.url.trim()
+            val base = ParseStore.resolveLineUrl(parse, context) ?: return@withContext null
             if (base.isBlank()) return@withContext null
             val full = base + URLEncoder.encode(videoUrl, Charsets.UTF_8.name())
             val builder = Request.Builder().url(full).get()

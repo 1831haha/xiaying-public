@@ -93,7 +93,7 @@ import java.util.UUID
  * v0.100.0 音乐源管理页：洛雪音源（脚本 URL）增删改查 + 测试解析。
  *
  * 测试：内置 huibq 走顶层 resolveBuiltinHuibq（纯 HTTP）；自定义源走
- * LxMusicSourceEngine.resolveMusicUrl（QuickJS 跑 LX 脚本）。
+ * LxMusicSourceEngine.resolveMusicUrl（V8 跑 LX 脚本）。
  */
 @Composable
 fun MusicSourceScreen(onBack: () -> Unit = {}) {
@@ -921,7 +921,7 @@ fun MusicSourceScreen(onBack: () -> Unit = {}) {
     if (testing || testMsg != null) {
         TechDialog(
             // v0.109.0 A6：testing 期间关弹窗 = 取消测试协程并清状态，不再锁死；
-            // 注意 resolveMusicUrl 内部是 QuickJS 同步调用，cancel 只保证弹窗可关、
+            // 注意 resolveMusicUrl 内部是 V8 同步调用，cancel 只保证弹窗可关、
             // 过期结果不再回填，JS 线程上的阻塞调用要等它自己返回/15s 超时
             onDismissRequest = {
                 if (testing) {

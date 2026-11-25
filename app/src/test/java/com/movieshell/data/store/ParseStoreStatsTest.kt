@@ -37,4 +37,24 @@ class ParseStoreStatsTest {
         assertEquals("https://jx.example.com/?url=", parsed?.first)
         assertEquals(ParseStore.Stat(0, 2, 0), parsed?.second)
     }
+
+    // ---------------- v1.4.22：下线剩余分钟（纯函数） ----------------
+
+    @Test
+    fun tripRemainingMinutes_notTripped() {
+        val now = 1_000_000L
+        assertEquals(0, ParseStore.tripRemainingMinutes(0, now))
+        assertEquals(0, ParseStore.tripRemainingMinutes(now, now))
+        assertEquals(0, ParseStore.tripRemainingMinutes(now - 1, now))
+    }
+
+    @Test
+    fun tripRemainingMinutes_roundsUpToOneMinute() {
+        val now = 1_000_000L
+        assertEquals(1, ParseStore.tripRemainingMinutes(now + 30_000, now))
+        assertEquals(1, ParseStore.tripRemainingMinutes(now + 60_000, now))
+        assertEquals(2, ParseStore.tripRemainingMinutes(now + 60_001, now))
+        assertEquals(2, ParseStore.tripRemainingMinutes(now + 90_000, now))
+        assertEquals(30, ParseStore.tripRemainingMinutes(now + 30 * 60_000, now))
+    }
 }

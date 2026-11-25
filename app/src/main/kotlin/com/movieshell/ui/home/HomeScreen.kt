@@ -119,6 +119,7 @@ import com.movieshell.domain.model.isCmsSite
 import com.movieshell.domain.model.isDrpySite
 import com.movieshell.domain.model.isJavaSpider
 import com.movieshell.domain.model.isPySite
+import com.movieshell.domain.model.isSubSite
 import com.movieshell.data.store.ApiSourceStore
 import com.movieshell.data.source_mgr.DetailSiteRoute
 import com.movieshell.core.log.LogBus
@@ -126,6 +127,8 @@ import com.movieshell.data.source_mgr.DrpySourceManager
 import com.movieshell.data.store.HomeCache
 import com.movieshell.core.util.HomeLoadGate
 import com.movieshell.data.source.PhpCliEngine
+import com.movieshell.data.source.SourceRiskGate
+import com.movieshell.ui.sources.SourceRiskDialog
 import com.movieshell.data.source_mgr.PhpSourceManager
 import com.movieshell.data.source_mgr.PySourceManager
 import com.movieshell.data.source_mgr.WebParseSourceManager
@@ -224,6 +227,10 @@ fun HomeScreen(
     // ApiSourceStore 里与 subUrl 对应的订阅名（添加订阅时已保证非空，
     // 兜底取域名）。第二项空串 = 本地源，无订阅名。
     var subSourceName by remember { mutableStateOf("") }
+    // v1.4.22 轨道 8：高危源首次执行前的二次确认弹窗态——引擎层已先拦
+    // 住未确认的高危源（SubSiteEngines 返回空引擎），这里只负责把确认
+    // 递到用户面前；确认后记在（源 key + 规则内容 SHA-256）上。
+    var pendingRiskExec by remember { mutableStateOf<SourceRiskGate.Pending?>(null) }
     /** 读持久化的订阅当前源；记录被删/被标不支持/订阅被关时返回 null */
     fun currentSubSite(): Site? {
         subSourceName = ""
@@ -1332,6 +1339,32 @@ fun HomeScreen(
             }.getOrDefault(0)
         }
     }
+    // v1.4.22 轨道 8：订阅 drpy/PY 源首次执行前的高危二次确认。切到
+    // 高危未确认的源时引擎层已拦住执行（首页不出数据、失败原因写
+    // “高危源待确认”），这里弹确认；点取消不执行、不记任何东西，
+    // 下次切回该源还会再弹。文件读 + 扫描走 IO 线程。
+    LaunchedEffect(subSite?.key) {
+        // v1.4.22 审稿 S2：先清掉旧 pending，免得切源后旧确认框还盖在新源
+        // 页面上；IO 回来时再校验 key 仍是本次的源，旧结果不覆盖新结果。
+        pendingRiskExec = null
+        val site = subSite ?: return@LaunchedEffect
+        val isCodeSite = when {
+            site.key.startsWith("local:drpy:") -> site.api.trim().endsWith(".js", ignoreCase = true)
+            site.key.startsWith("local:py:") -> site.api.trim().endsWith(".py", ignoreCase = true)
+            site.isSubSite() -> site.isDrpySite() || site.isPySite()
+            else -> false
+        }
+        val pending = try {
+            withContext(Dispatchers.IO) {
+                SourceRiskGate.pendingFor(context, site.key, site.name, site.api, isCodeSite)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        if (pending != null && subSite?.key == site.key) pendingRiskExec = pending
+    }
     // v0.279.0 起平底；自定义背景底图（设置页更换）照旧在深色下生效。
     // v1.1.27：浅色下也画自定义底图——之前只在深色下画，浅色设了也看不见
     // （设置页照样显示“已自定义”，用户以为没生效）。深色走老路（黑罩 0.55＋
@@ -1991,6 +2024,37 @@ fun HomeScreen(
                     )
                 }
             }
+        }
+        // v1.4.22 轨道 8：高危源首次执行前的二次确认。pendingRiskExec
+        // 非空即是守卫（TechDialog 本身不带守卫）；点取消只关弹窗、
+        // 不执行；点确认执行记下（源 key + 规则 SHA-256）同意 + 白名单，
+        // 再强制重载首页。弹窗内容含 LazyColumn，SourceRiskDialog 内部
+        // 已传 scrollable=false。
+        pendingRiskExec?.let { pending ->
+            // v1.4.22 审稿 B1：PY 源白名单只记录、不强制——弹窗文案须按源类型
+            // 区分，不能对 PY 源谎称“只限白名单域名”；白名单为空的 drpy 源
+            // 确认后也不限制联网（见 SourceRiskGate S1），文案同样据实写。
+            val isPySource = pending.siteKey.startsWith("local:py:") ||
+                (subSite?.key == pending.siteKey && subSite?.isPySite() == true)
+            val hosts = pending.sandbox.allowedHosts.toList()
+            val footerNote = when {
+                isPySource -> "这是正则启发式扫描的提示，不是安全边界：能被绕过。确认只对当前这份规则内容有效，规则文件一改，下次执行会重新提示；PY 源暂无按源限制联网的口子，白名单只记录、不强制限制。"
+                hosts.isEmpty() -> "这是正则启发式扫描的提示，不是安全边界：能被绕过。确认只对当前这份规则内容有效，规则文件一改，下次执行会重新提示；规则里没找到字面域名，确认后不限制联网。"
+                else -> "这是正则启发式扫描的提示，不是安全边界：能被绕过。确认只对当前这份规则内容有效，规则文件一改，下次执行会重新提示；确认后，JS 请求的初始域名仅允许访问规则中提取的白名单域名。注意：HTTP 重定向目标不会再次检查，不能视为完整的网络隔离。"
+            }
+            SourceRiskDialog(
+                fileName = pending.siteName,
+                report = pending.report,
+                onDismissRequest = { pendingRiskExec = null },
+                onConfirm = {
+                    SourceRiskGate.confirm(context, pending)
+                    pendingRiskExec = null
+                    loadHome(force = true)
+                },
+                confirmText = "确认执行",
+                footerNote = footerNote,
+                allowedHosts = if (isPySource) emptyList() else hosts,
+            )
         }
     } // v0.32.0：闭合 Box（流动光斑垫底）
 }

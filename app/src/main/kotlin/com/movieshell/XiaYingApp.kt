@@ -75,15 +75,16 @@ class XiaYingApp : Application() {
         PhpSourceManager.init(this)
         // v1.1.31：站点健康分读盘（搜索/详情/播放记账用）
         SourceHealthStore.init(this)
-        // v0.294.46：PY 解释器后台预热——原来第一次点 PY 源时才 Python.start()，
-        // 1–2 秒启动费全算在首屏里；启动时后台预热，首屏只剩站点网络时间。
-        // 不阻塞启动：失败只记日志，首个 PY 源调用时再按老路启动。
-        CoroutineScope(Dispatchers.IO).launch {
-            runCatching {
-                ChaquopyEngine.init(this@XiaYingApp)
-                ChaquopyEngine.warmup()
-            }
-        }
+        // v1.4.22（轨道 7）：PY 解释器不再启动时预热——v0.294.46 的后台
+        // warmup()（Python.start() 约 1–2 秒 + 依赖自检 import）已删，
+        // 首启不再付这笔费；解释器改由首个 PY 源真正使用时在
+        // ChaquopyEngine.python() 里惰性单次启动，那次调用多等 1–2 秒。
+        // init() 只存 applicationContext，不启动解释器、不碰 Python，
+        // 零成本，故仍放这里：WorkManager 单独拉起的进程（如源探活、
+        // 小说追更）不跑 MainActivity，Application 是唯一能保证
+        // ChaquopyEngine.init() 已调过的地方；PySourceManager.init()
+        // 里也会再调一次（幂等）。
+        ChaquopyEngine.init(this@XiaYingApp)
         // v0.294.46：V8 sandbox 同理后台预热——原来第一次用 JS 源时才连 sandbox，
         // 连接费算在首屏里；启动时后台先连好，JS 源首屏同样只剩站点网络时间。
         // sandbox() 自带能力门禁与失败日志，不阻塞启动，失败不影响后续正常调用。

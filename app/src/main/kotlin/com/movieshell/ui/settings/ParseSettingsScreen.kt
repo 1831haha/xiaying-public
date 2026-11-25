@@ -48,9 +48,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.movieshell.core.log.LogBus
+import com.movieshell.data.store.ParseKeyStore
 import com.movieshell.data.store.ParseStore
+import com.movieshell.domain.model.ParseConfig
 import com.movieshell.data.source.ParseApi
 import com.movieshell.ui.components.TabTopBar
 import com.movieshell.ui.components.TechTextField
@@ -78,6 +82,9 @@ fun ParseSettingsScreen(onBack: () -> Unit) {
     var probeDone by remember { mutableStateOf(0) }
     var probeTotal by remember { mutableStateOf(0) }
     var showAddDialog by remember { mutableStateOf(false) }
+    // v1.4.22：解析密钥对话框目标线路 + 填 key 后重读“是否已填”的版本号。
+    var keyDialogFor by remember { mutableStateOf<ParseConfig?>(null) }
+    var keyGen by remember { mutableStateOf(0) }
     // v0.294.7（M8 / H3）：解析总时长上限与单条嗅探超时
     SniffConfig.ensureLoaded(context)
     var budgetSec by remember { mutableStateOf((SniffConfig.parseBudgetMs / 1000).toInt()) }
@@ -86,6 +93,11 @@ fun ParseSettingsScreen(onBack: () -> Unit) {
 
     fun probeOne(index: Int) {
         val parse = customParses.getOrNull(index) ?: return
+        // v1.4.22：未填 key 的线路测了也是不通——点行改为打开填 key 框。
+        if (ParseStore.needsKey(parse) && !ParseStore.hasKey(parse)) {
+            keyDialogFor = parse
+            return
+        }
         // 下发时记下 url，写回前校验该 url 还在列表里，删行后的迟到结果直接丢弃。
         val url = parse.url
         if (url in testing || probingAll) return
@@ -199,12 +211,19 @@ fun ParseSettingsScreen(onBack: () -> Unit) {
                 ) { index, parse ->
                     val state = probeResults[parse.url]
                     val isTesting = parse.url in testing
+                    // v1.4.22：key 与下线状态（keyGen 变化时重读是否已填 key）。
+                    val needsKey = ParseStore.needsKey(parse)
+                    val hasKey = remember(parse.url, keyGen) { ParseStore.hasKey(parse) }
+                    val tripUntil = ParseStore.trippedUntil(parse.url)
+                    val tripped = tripUntil > System.currentTimeMillis()
                     SettingsRow(
                         icon = Icons.Filled.Link,
                         title = parse.name.ifBlank { "未命名" },
                         subtitle = buildString {
                             append(when (parse.type) { 1 -> "JSON"; 99 -> "yt-dlp"; else -> "嗅探" })
                             append(" · ${parse.url}")
+                            if (needsKey && !hasKey) append(" · 未填 key，不参与解析")
+                            if (tripped) append(" · 已下线，约 ${ParseStore.tripRemainingMinutes(tripUntil)} 分钟后自动恢复")
                             // v0.272.0（T38）：单条测活行上显示“测试中…”——原来 testing
                             // 只用来防重，点完行上没有任何变化，用户不知道测没测。
                             if (isTesting) append(" · 测试中…")
@@ -217,7 +236,24 @@ fun ParseSettingsScreen(onBack: () -> Unit) {
                         onClick = { probeOne(index) },
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                when (state) {
+                                if (needsKey) {
+                                    TextButton(onClick = { keyDialogFor = parse }) {
+                                        Text(
+                                            if (hasKey) "改 key" else "填 key",
+                                            fontSize = 12.sp,
+                                        )
+                                    }
+                                }
+                                if (tripped) {
+                                    // v1.4.22：手动恢复下线（恢复按钮本身即状态说明，不再另画失效图标）。
+                                    TextButton(onClick = {
+                                        ParseStore.clearTripped(parse.url)
+                                        probeResults = probeResults - parse.url
+                                        testing = testing - parse.url
+                                    }) {
+                                        Text("恢复", fontSize = 12.sp)
+                                    }
+                                } else when (state) {
                                     true -> Icon(
                                         Icons.Filled.CheckCircle,
                                         contentDescription = "正常",
@@ -285,6 +321,46 @@ fun ParseSettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    // v1.4.22：解析密钥对话框（key 只存本机加密存储，框里不回显已存的值）。
+    keyDialogFor?.let { line ->
+        var keyInput by remember(line.url) { mutableStateOf("") }
+        val lineHasKey = remember(line.url, keyGen) { ParseStore.hasKey(line) }
+        TechDialog(
+            onDismissRequest = { keyDialogFor = null },
+            title = "解析密钥：${line.name}",
+            subtitle = if (lineHasKey) "已保存密钥（不显示）。重新填写覆盖，留空保存为清除。" else "该线路地址里含 {key}，填入后才参与解析。密钥只存本机加密存储，不会上传。",
+            confirmText = "保存",
+            onConfirm = {
+                ParseKeyStore.setKey(context, line.url, keyInput.trim())
+                probeResults = probeResults - line.url
+                keyGen++
+                keyDialogFor = null
+            },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                TechTextField(
+                    value = keyInput,
+                    onValueChange = { keyInput = it },
+                    placeholder = "密钥",
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "地址模板：${line.url}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "密钥由解析服务要求，与旧版通用；可从原来带密钥的解析地址或常见分享里找到。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+
     // 添加解析接口对话框（从设置页搬过来）
     if (showAddDialog) {
         var parseName by remember { mutableStateOf("") }
@@ -342,7 +418,7 @@ fun ParseSettingsScreen(onBack: () -> Unit) {
                         )
                     }
                     Text(
-                        text = "JSON：GET 地址+视频地址，取返回 JSON 的 url 字段；嗅探：用 WebView 打开抓直链；yt-dlp 通用：无规则视频页的通用解析，需先在插件市场安装 yt-dlp 通用解析包，地址栏留空即可（自动填 ytdlp://generic，仅作线路标识）",
+                        text = "JSON：GET 地址+视频地址，取返回 JSON 的 url 字段；嗅探：用 WebView 打开抓直链；yt-dlp 通用：无规则视频页的通用解析，需先在插件市场安装 yt-dlp 通用解析包，地址栏留空即可（自动填 ytdlp://generic，仅作线路标识）；地址里写 {key} 可引用本机保存的密钥（列表里点「填 key」填写，未填时该线路不参与解析）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

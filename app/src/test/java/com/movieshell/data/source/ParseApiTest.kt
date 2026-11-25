@@ -110,6 +110,37 @@ class ParseApiTest {
         assertEquals(0, server.requestCount)
     }
 
+    // ---------------- v1.4.22：`{key}` 模板未填 key 的线路直接跳过 ----------------
+    // 单测里 ParseStore 从未 load（无 appCtx），key 一律按未填处理。
+
+    @Test
+    fun keylessTemplateLine_skippedWithoutRequest() = runTest {
+        server.enqueue(json("""{"url":"https://cdn.example/good.m3u8"}"""))
+        // 注意：不用 server.url() 拼地址——HttpUrl 会把 {key} 编码成 %7B…，
+        // 占位符就认不出来了；这里直接拼字符串，`{key}` 保持原样。
+        val keyless = ParseConfig(
+            name = "J2",
+            url = "http://127.0.0.1:${server.port}/api/?key={key}&url=",
+            type = 1,
+        )
+        val result = api.parse(listOf(keyless, type1()), "vid123")
+
+        assertEquals("https://cdn.example/good.m3u8", result)
+        // 只有好线路发了一次请求，未填 key 的模板线路一次都没发。
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun allLinesKeyless_returnsEmptyWithoutRequest() = runTest {
+        val keyless = ParseConfig(
+            name = "J2",
+            url = "http://127.0.0.1:${server.port}/api/?key={key}&url=",
+            type = 1,
+        )
+        assertEquals("", api.parse(listOf(keyless), "vid123"))
+        assertEquals(0, server.requestCount)
+    }
+
     @Test
     fun deadLine_skippedOnRetry_parseReturnsNextLine() = runTest {
         // v1.2.8：第一轮最快的线回了死链（记死 + 缓存失效），第二轮重解析跳过它，拿到另一条线的结果。
