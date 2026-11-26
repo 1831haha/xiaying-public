@@ -56,7 +56,6 @@ import com.movieshell.ui.actor.ActorWorksScreen
 import com.movieshell.ui.ai.AiScreen
 import com.movieshell.ui.bookshelf.BookshelfScreen
 import com.movieshell.ui.bookshelf.NovelTocScreen
-import com.movieshell.ui.changelog.ChangelogScreen
 import com.movieshell.ui.components.AppToast
 import com.movieshell.ui.detail.DetailScreen
 import com.movieshell.ui.download.DownloadScreen
@@ -598,7 +597,6 @@ fun NavGraphBuilder.appDestinations(
                             SettingsScreen(
                                 onManualClick = { navController.navigate("manual") },
                                 onDownloadsClick = { navController.navigate("downloads") },
-                                onChangelogClick = { navController.navigate("changelog") },
                                 onSourcesClick = { navController.navigate("sources") },
                                 // v0.78.2：解析接口子页面
                                 onParseSettingsClick = { navController.navigate("parse_settings") },
@@ -682,10 +680,6 @@ fun NavGraphBuilder.appDestinations(
                             NetworkSettingsScreen(
                                 onBack = { navController.popBackStack() },
                             )
-                        }
-                        // v0.30.0：更新日志独立页
-                        composable("changelog") {
-                            ChangelogScreen(onBack = { navController.popBackStack() })
                         }
                         // v0.79.0：实验室 tab 改为音乐 tab；原实验室功能已搬进设置页
                         composable("music") {

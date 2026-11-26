@@ -133,7 +133,6 @@ import com.movieshell.ui.preview.fileProviderAuthority
 import com.movieshell.data.store.PlayerSettings
 import com.movieshell.domain.model.PlayerEngine
 import com.movieshell.player.PlayerManager
-import com.movieshell.ui.changelog.CHANGELOG
 import com.movieshell.data.source.PluginMarket
 import com.movieshell.data.store.PluginStore
 import com.movieshell.data.store.SettingsLayoutStore
@@ -181,7 +180,6 @@ import coil.imageLoader
 fun SettingsScreen(
     onManualClick: () -> Unit = {},
     onDownloadsClick: () -> Unit = {},
-    onChangelogClick: () -> Unit = {},
     onSourcesClick: () -> Unit = {}, // v0.36.0：站源管理入口（tab 删除后搬进设置）
     onParseSettingsClick: () -> Unit = {}, // v0.78.2：解析接口子页面入口
     onThemeCollectionClick: () -> Unit = {}, // v1.2.5：主题收藏夹子页面入口
@@ -667,7 +665,7 @@ fun SettingsScreen(
                 )
                 // v0.188.0：关于不可点，版本信息在副标题里展示
                 SegItem(
-                    position = SegPos.Middle,
+                    position = SegPos.Last,
                     icon = Icons.Outlined.Info,
                     title = "关于侠影",
                     subtitle = "v${com.movieshell.BuildConfig.VERSION_NAME} · 本地影视聚合",
@@ -678,15 +676,6 @@ fun SettingsScreen(
                             modifier = Modifier.size(40.dp),
                         )
                     },
-                )
-                // v0.30.0：更新日志独立入口
-                // v1.2.14：副标题写实时值——静态日志里记了多少版。
-                SegItem(
-                    position = SegPos.Last,
-                    icon = Icons.Outlined.NewReleases,
-                    title = "更新日志",
-                    subtitle = "共 ${CHANGELOG.size} 版更新记录",
-                    onClick = onChangelogClick,
                 )
                     }
                 }
