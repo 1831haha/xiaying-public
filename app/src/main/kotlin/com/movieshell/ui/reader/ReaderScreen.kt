@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -118,6 +119,8 @@ import com.movieshell.domain.model.ReadingProgress
 import com.movieshell.data.novel.BookSourceManager
 import com.movieshell.domain.model.ChapterMeta
 import com.movieshell.domain.model.ContentFail
+import com.movieshell.data.novel.NovelBookCache
+import com.movieshell.data.novel.NovelBookSearch
 import com.movieshell.data.novel.NovelContentService
 import com.movieshell.data.novel.NovelSourceEngine
 import com.movieshell.data.novel.PyBookSourceManager
@@ -299,6 +302,13 @@ fun ReaderScreen(
     // v0.215.0：章内搜索（本章正文内找词、点结果跳转；滚动模式按恢复同款公式换算像素，翻页模式按页首偏移跳页）。
     var showChapterSearch by remember { mutableStateOf(false) }
     var chapterSearchQuery by remember { mutableStateOf("") }
+    // v1.4.28：书内搜索（全书正文内找词，只搜已缓存章节；提交时跑一次、点结果跳转）。
+    var showBookSearch by remember { mutableStateOf(false) }
+    var bookSearchQuery by remember { mutableStateOf("") }
+    var bookSearchResults by remember { mutableStateOf<NovelBookSearch.BookSearchResult?>(null) }
+    var bookSearchDone by remember { mutableStateOf(false) }
+    var bookSearching by remember { mutableStateOf(false) }
+    var bookSearchJob by remember { mutableStateOf<Job?>(null) }
     // v1.1.3：段评入口开关（只有本章带评论链接时才点亮图标）。
     var showComment by remember { mutableStateOf(false) }
     // v1.1.10：结构化段评——按章缓存的评论（数据层自带 24 小时 sidecar 缓存，
@@ -858,6 +868,25 @@ fun ReaderScreen(
         else locate(LandingTarget.Offset(chapter, offset))
     }
 
+    /** v1.4.28：书内搜索点结果——①-R1：内存快照可能落后于磁盘（后台整本缓存只写盘），先把磁盘正文补进内存再跳。 */
+    fun openBookSearchHit(hit: NovelBookSearch.BookHit) {
+        showBookSearch = false
+        scope.launch {
+            val mem = chapters.getOrNull(hit.chapterIndex)
+            if (mem != null && mem.content.isBlank()) {
+                val diskContent = runCatching {
+                    NovelStore.chapters(context, novelId).getOrNull(hit.chapterIndex)?.content
+                }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                if (!diskContent.isNullOrBlank()) {
+                    chapters = chapters.map {
+                        if (it.index == hit.chapterIndex) it.copy(content = diskContent) else it
+                    }
+                }
+            }
+            locateChapterOffset(hit.chapterIndex, hit.offset)
+        }
+    }
+
     /** 上一章按钮：回上一章末页（233 定论，GPT 第三轮的标题页说法已纠正）。 */
     fun locatePrevChapter() {
         if (chapterIndex > 0) locate(LandingTarget.LastText(chapterIndex - 1))
@@ -1244,6 +1273,145 @@ fun ReaderScreen(
             }
         }
 
+        // v1.4.28：书内搜索——只搜已缓存正文章节，未缓存不拉取；提交时跑一次。
+        if (showBookSearch) {
+            // 覆盖行口径抄 BookDetailDialog 的缓存行：订阅 NovelBookCache.progress，
+            // 运行中显示实时 done/total，停下时重算 cachedCount。
+            val cacheMap by NovelBookCache.progress.collectAsState()
+            val live = cacheMap[novelId]
+            var bookCached by remember(novelId) { mutableStateOf<Pair<Int, Int>?>(null) }
+            LaunchedEffect(novelId, live?.running) {
+                bookCached = runCatching { NovelBookCache.cachedCount(context, novelId) }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+            }
+            val cacheRunning = live?.running == true
+            val (cachedDone, cachedTotal) = if (live != null) live.done to live.total else bookCached ?: (0 to 0)
+            TechDialog(
+                onDismissRequest = {
+                    bookSearchJob?.cancel()
+                    showBookSearch = false
+                },
+                title = "书内搜索",
+                // v1.3.33：搜索结果长列表走宽松模式。
+                compact = false,
+                subtitle = novel?.title.orEmpty(),
+                forceDark = isReaderDark,
+            ) {
+                AppSearchBar(
+                    value = bookSearchQuery,
+                    onValueChange = { bookSearchQuery = it },
+                    placeholder = "输入要找的词",
+                    modifier = Modifier.fillMaxWidth(),
+                    autoFocus = true,
+                    // ①-R2：AppSearchBar 自带 onSearch（回车/点放大镜触发），不用另写输入框。
+                    onSearch = { q ->
+                        val query = q.trim()
+                        if (query.isEmpty()) return@AppSearchBar
+                        bookSearching = true
+                        bookSearchDone = false
+                        bookSearchJob?.cancel()
+                        bookSearchJob = scope.launch {
+                            // 搜磁盘章节（内存快照可能落后于后台整本缓存的写盘）。
+                            val disk = runCatching { NovelStore.chapters(context, novelId) }.onFailure { if (it is CancellationException) throw it }.getOrNull().orEmpty()
+                            bookSearchResults = NovelBookSearch.searchInBook(disk, query)
+                            bookCached = runCatching { NovelBookCache.cachedCount(context, novelId) }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                            bookSearching = false
+                            bookSearchDone = true
+                        }
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (cachedTotal > 0) "已缓存 $cachedDone/$cachedTotal 章，仅搜已缓存章节"
+                        else "仅搜已缓存章节",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (novel?.sourceKey != "local" && !(cachedTotal > 0 && cachedDone >= cachedTotal)) {
+                        TextButton(onClick = {
+                            if (cacheRunning) NovelBookCache.cancel(novelId)
+                            else NovelBookCache.start(context, novelId)
+                        }) {
+                            Text(
+                                if (cacheRunning) "取消"
+                                else if (cachedDone > 0) "继续缓存" else "缓存全本",
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                if (bookSearching) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "正在搜索…",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else if (bookSearchDone) {
+                    val result = bookSearchResults
+                    if (result == null || result.totalHits == 0) {
+                        Text(
+                            "没有找到",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Text(
+                            "在 ${result.chaptersWithHits} 章中找到 ${result.totalHits} 处" +
+                                if (result.listedHits < result.totalHits) "，只列出前 ${result.listedHits} 处" else "",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 320.dp)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            result.chapters.forEach { group ->
+                                Text(
+                                    "${group.chapterTitle}（${group.total} 处）",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+                                )
+                                group.hits.forEach { hit ->
+                                    Text(
+                                        hit.snippet,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { openBookSearchHit(hit) }
+                                            .padding(vertical = 6.dp),
+                                    )
+                                }
+                                if (group.total > group.hits.size) {
+                                    Text(
+                                        "本章共 ${group.total} 处，只列出前 ${group.hits.size} 处",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 正文（v0.61.0：点中央切换沉浸模式；章节标题印在正文顶部）
         // v0.89.0：翻页模式 1/2 用 HorizontalPager，点按中央切换沉浸（drag 留给 pager）
         Box(
@@ -1544,6 +1712,11 @@ fun ReaderScreen(
                         GlassMenuItem(Icons.Filled.Search, "章内搜索", onClick = {
                             showTopMore = false
                             showChapterSearch = true
+                        })
+                        // v1.4.28：书内搜索放「章内搜索」旁边；图标换 ManageSearch，不与章内搜索同图标。
+                        GlassMenuItem(Icons.Filled.ManageSearch, "书内搜索", onClick = {
+                            showTopMore = false
+                            showBookSearch = true
                         })
                         if (novel?.sourceKey != "local") {
                             GlassMenuItem(Icons.Filled.Refresh, "刷新本章", onClick = {

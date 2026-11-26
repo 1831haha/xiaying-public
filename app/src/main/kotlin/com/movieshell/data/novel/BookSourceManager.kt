@@ -135,6 +135,9 @@ object BookSourceManager {
             _sources.value = old
             return@withLock 0
         }
+        // v1.4.28 A3：导入成功即作废这些 key 的目录/发现缓存（删源时清过、导回同 key 时也要清，
+        // 否则 5–10 分钟内读到旧规则抓到的缓存）。清 list 全部 key，不只清 added 的。
+        invalidateCaches(*list.map { it.key }.toTypedArray())
         added
     }
 
@@ -173,6 +176,8 @@ object BookSourceManager {
             _sources.value = old
             return@withLock false
         }
+        // v1.4.28 A3：同 importSources，恢复成功即作废内置源的目录/发现缓存。
+        invalidateCaches(*builtIn().map { it.key }.toTypedArray())
         true
     }
 

@@ -73,6 +73,20 @@ sealed interface SourceRow {
          * 折叠组里已手动勾上的行会被丢掉（计数还会出现 5/3）。折叠组里没勾的行仍不会被勾上。
          */
         fun selectAllVisible(selected: Set<String>, visible: Collection<String>): Set<String> = selected + visible
+
+        /**
+         * v1.4.28 A4：批量“反选”只翻转可见行——(已选 − 可见) ∪ (可见 − 已选)。
+         * 折叠组里藏起来的行保持原样（勾着的继续勾着、没勾的继续没勾）。
+         */
+        fun invertVisible(selected: Set<String>, visible: Collection<String>): Set<String> =
+            (selected - visible.toSet()) + (visible.toSet() - selected)
+
+        /**
+         * v1.4.28 B1：PY 区段头计数只数过滤后列表里启用了的（与下面实际列出的行一致），
+         * 不数未过滤全量。顶部统计条的全量口径不动，不走这里。
+         */
+        fun enabledPyCount(rules: List<PyBookSourceManager.PyBookRule>, enabled: Set<String>): Int =
+            rules.count { it.name in enabled }
     }
 }
 
@@ -179,6 +193,9 @@ object SourceRowActions {
         }
         PyBookSourceManager.load(context)
         if (entry.enabled) PyBookSourceManager.setEnabled(context, entry.originKey, true)
+        // v1.4.28 A3（⑤-R1）：PY 回收站恢复成功同样作废该源的目录/发现缓存
+        //（删时 softDeletePy 已清，恢复不写回清会读到删前旧规则的缓存）。
+        BookSourceManager.invalidateCaches(PyBookSourceManager.SOURCE_KEY_PREFIX + entry.originKey)
         return RestoreResult.OK
     }
 

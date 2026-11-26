@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -86,18 +87,24 @@ import androidx.compose.ui.window.DialogProperties
 import com.movieshell.core.js.LegadoJsEngine
 import com.movieshell.data.novel.BookProbe
 import com.movieshell.data.novel.BookProbeStore
+import com.movieshell.data.novel.BookRuleEngine
 import com.movieshell.data.novel.toSourceHealth
 import com.movieshell.domain.model.shortLabel
 import com.movieshell.domain.model.BookSource
 import com.movieshell.data.novel.BookSourceManager
+import com.movieshell.data.novel.NovelContentService
+import com.movieshell.data.novel.NovelSourceEngine
 import com.movieshell.data.novel.NovelSourceTrash
 import com.movieshell.data.novel.PurifyRuleStore
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.source.CmsApi
 import com.movieshell.ui.components.TechTextField
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /**
@@ -482,7 +489,7 @@ fun BookSourceScreen(
             // v0.64.0：本地 PY 书源区
             if (shownPy.isNotEmpty()) {
                 item(key = "py_header") {
-                    SourceSectionTitle("本地 PY 书源 · ${pyRules.count { it.name in pyEnabled }} 已启用")
+                    SourceSectionTitle("本地 PY 书源 · ${SourceRow.enabledPyCount(shownPy, pyEnabled)} 已启用")
                 }
             }
             items(shownPy, key = { "py_${it.name}" }) { r ->
@@ -607,7 +614,7 @@ fun BookSourceScreen(
                         Text("全选（已选 ${selectedSrcKeys.size}）", fontSize = 12.sp, color = palette.title)
                     }
                     TextButton(onClick = {
-                        selectedSrcKeys = visibleSelectKeys.filter { it !in selectedSrcKeys }.toSet()
+                        selectedSrcKeys = SourceRow.invertVisible(selectedSrcKeys, visibleSelectKeys)
                     }) { Text("反选", fontSize = 12.sp, color = palette.title) }
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = { batchMode = false; selectedSrcKeys = emptySet() }) {
@@ -919,7 +926,158 @@ fun BookSourceScreen(
     editTarget?.let { s ->
         var draft by remember(s.key) { mutableStateOf(s) }
         var tab by remember(s.key) { mutableStateOf(0) }
-        val tabs = listOf("基础", "搜索", "详情", "目录", "正文", "发现")
+        // v1.4.28：书源调试状态（随弹窗走；切页签不丢，关弹窗即弃）。
+        var debugKeyword by remember(s.key) { mutableStateOf("") }
+        var debugSteps by remember(s.key) { mutableStateOf<List<DebugStep>>(emptyList()) }
+        var debugRunning by remember(s.key) { mutableStateOf(false) }
+        var debugJob by remember(s.key) { mutableStateOf<Job?>(null) }
+        // 调试用弹窗内 scope：关弹窗时组合退出，scope 随之取消，在途调试自动停。
+        val debugScope = rememberCoroutineScope()
+
+        fun updateStep(index: Int, update: (DebugStep) -> DebugStep) {
+            debugSteps = debugSteps.mapIndexed { i, st -> if (i == index) update(st) else st }
+        }
+
+        // v1.4.28：书源调试——对未保存的 draft 跑四步（搜索→详情→目录→正文），每步 30 秒超时；
+        // 只做 JSON 源（本弹窗本就是 JSON 书源编辑）；目录步直调 chapters、正文步用 fetchPurified，
+        // 不污染正式缓存；结果不持久化。
+        fun runDebug() {
+            val keyword = debugKeyword.trim().ifBlank { draft.effectiveCheckKeyWord }
+            debugSteps = listOf("搜索", "详情", "目录", "正文").map { DebugStep(name = it) }
+            debugRunning = true
+            debugJob?.cancel()
+            debugJob = debugScope.launch {
+                val engine = NovelSourceEngine.novelEngineFor(context, draft)
+                try {
+                    // 第 1 步：搜索（带轨迹；不写失败名单、不记死站）。
+                    updateStep(0) { it.copy(status = DebugStatus.RUNNING) }
+                    val trace = withTimeoutOrNull(DEBUG_STEP_TIMEOUT_MS) {
+                        NovelSourceEngine.searchWithTrace(draft, keyword, allowGate = false, recordFailures = false)
+                    }
+                    if (trace == null) {
+                        updateStep(0) { it.copy(status = DebugStatus.TIMEOUT, summary = "30 秒超时") }
+                        return@launch
+                    }
+                    updateStep(0) {
+                        it.copy(
+                            status = if (trace.results.isNotEmpty()) DebugStatus.OK else DebugStatus.FAILED,
+                            requestUrl = trace.requestUrl,
+                            httpCode = trace.httpCode,
+                            bodyLength = trace.bodyLength,
+                            bodyPreview = trace.bodyPreview,
+                            summary = if (trace.results.isEmpty()) "搜到 0 本"
+                            else "搜到 ${trace.results.size} 本：" + trace.results.take(3).joinToString("、") { b -> b.title },
+                        )
+                    }
+                    val first = trace.results.firstOrNull() ?: return@launch
+                    // 第 2 步：详情（解析走 bookDetail；原始返回另抓一次详情页，默认 UA，仅供参考）。
+                    updateStep(1) { it.copy(status = DebugStatus.RUNNING) }
+                    val detailPair = withTimeoutOrNull(DEBUG_STEP_TIMEOUT_MS) {
+                        val info = engine.bookDetail(first)
+                        val raw = BookRuleEngine.fetchPageOutcome(first.remoteId)
+                        info to raw
+                    }
+                    if (detailPair == null) {
+                        updateStep(1) { it.copy(status = DebugStatus.TIMEOUT, summary = "30 秒超时") }
+                        return@launch
+                    }
+                    val (info, rawDetail) = detailPair
+                    val rawDetailBody = rawDetail.page?.body.orEmpty()
+                    updateStep(1) {
+                        it.copy(
+                            status = if (info.name.isNotBlank() || info.author.isNotBlank()) DebugStatus.OK else DebugStatus.FAILED,
+                            requestUrl = rawDetail.page?.url ?: first.remoteId,
+                            httpCode = rawDetail.httpCode,
+                            bodyLength = rawDetailBody.length,
+                            bodyPreview = foldPreview(rawDetailBody),
+                            note = "原始返回为默认 UA 复抓，仅供参考",
+                            summary = "书名：${info.name.ifBlank { "—" }} / 作者：${info.author.ifBlank { "—" }}",
+                        )
+                    }
+                    // 第 3 步：目录（直调 chapters，不走 NovelTocService；③-R1 方案 A：
+                    // 另抓一次 remoteId 详情页作轨迹，行内标注；目录本身的原始返回记 "—"，多页跳转不复抓）。
+                    updateStep(2) { it.copy(status = DebugStatus.RUNNING) }
+                    val tocPair = withTimeoutOrNull(DEBUG_STEP_TIMEOUT_MS) {
+                        val list = engine.chapters(first)
+                        val raw = BookRuleEngine.fetchPageOutcome(first.remoteId)
+                        list to raw
+                    }
+                    if (tocPair == null) {
+                        updateStep(2) { it.copy(status = DebugStatus.TIMEOUT, summary = "30 秒超时") }
+                        return@launch
+                    }
+                    val (tocList, rawToc) = tocPair
+                    val rawTocBody = rawToc.page?.body.orEmpty()
+                    updateStep(2) {
+                        it.copy(
+                            status = if (tocList.isNotEmpty()) DebugStatus.OK else DebugStatus.FAILED,
+                            requestUrl = rawToc.page?.url ?: first.remoteId,
+                            httpCode = rawToc.httpCode,
+                            bodyLength = rawTocBody.length,
+                            bodyPreview = foldPreview(rawTocBody),
+                            previewLabel = "详情页原始返回（目录页由规则推导）",
+                            note = "目录原始返回：—（解析可能多页跳转，不复抓）",
+                            summary = if (tocList.isEmpty()) "目录解析为空"
+                            else "共 ${tocList.size} 章：" + tocList.take(3).joinToString("、") { c -> c.title },
+                        )
+                    }
+                    val firstChapter = tocList.firstOrNull()
+                    if (firstChapter == null) {
+                        updateStep(3) { it.copy(status = DebugStatus.FAILED, summary = "目录为空，无章节可试") }
+                        return@launch
+                    }
+                    // 第 4 步：正文（fetchPurified：拉取＋净化，不写盘）。
+                    updateStep(3) { it.copy(status = DebugStatus.RUNNING) }
+                    val outcome = withTimeoutOrNull(DEBUG_STEP_TIMEOUT_MS) {
+                        NovelContentService.fetchPurified(context, engine, first.remoteId, draft.key, firstChapter, allowGate = false)
+                    }
+                    if (outcome == null) {
+                        updateStep(3) { it.copy(status = DebugStatus.TIMEOUT, summary = "30 秒超时") }
+                        return@launch
+                    }
+                    when (outcome) {
+                        is NovelContentService.Outcome.Ok -> updateStep(3) {
+                            it.copy(
+                                status = DebugStatus.OK,
+                                requestUrl = firstChapter.url,
+                                bodyLength = outcome.text.length,
+                                bodyPreview = foldPreview(outcome.text),
+                                summary = "正文 ${outcome.text.length} 字",
+                            )
+                        }
+                        is NovelContentService.Outcome.PurifyEmpty -> updateStep(3) {
+                            it.copy(
+                                status = DebugStatus.FAILED,
+                                requestUrl = firstChapter.url,
+                                bodyLength = outcome.raw.length,
+                                bodyPreview = foldPreview(outcome.raw),
+                                summary = "净化后为空（原文 ${outcome.raw.length} 字）",
+                            )
+                        }
+                        is NovelContentService.Outcome.Failed -> updateStep(3) {
+                            it.copy(
+                                status = DebugStatus.FAILED,
+                                requestUrl = firstChapter.url,
+                                summary = "失败：${outcome.reason}",
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    // 某步抛了未预期的异常（多为破损 JS 规则）：记到当前进行中的步上，不闪退。
+                    debugSteps = debugSteps.map {
+                        if (it.status == DebugStatus.RUNNING) it.copy(status = DebugStatus.FAILED, summary = "异常：${e.message ?: e::class.simpleName}") else it
+                    }
+                } finally {
+                    debugRunning = false
+                    // 被取消（点停止/关弹窗）时，把还停在“进行中”的步标成已停止。
+                    debugSteps = debugSteps.map {
+                        if (it.status == DebugStatus.RUNNING) it.copy(status = DebugStatus.FAILED, summary = "已停止") else it
+                    }
+                }
+            }
+        }
+        val tabs = listOf("基础", "搜索", "详情", "目录", "正文", "发现", "调试")
         TechDialog(
             onDismissRequest = { editTarget = null },
             title = "编辑书源",
@@ -999,7 +1157,9 @@ fun BookSourceScreen(
                         SourceField("正文下一页", draft.ruleContentNext, hint = "ruleContent.nextContentUrl") { draft = draft.copy(ruleContentNext = it) }
                         SourceField("共享 JS 库", draft.jsLib, hint = "阅读式 jsLib：只支持内联代码，填 URL 会拒绝保存", multiLine = true) { draft = draft.copy(jsLib = it) }
                     }
-                    else -> {
+                    // v1.4.28 ③-R2：发现与调试必须显式分支——原来发现走 else，加第 7 页签后
+                    // 5（发现）和 6（调试）都会落进 else，调试面板永不渲染。
+                    5 -> {
                         SourceField("发现地址", draft.exploreUrl, hint = "阅读式 exploreUrl：分类 JSON 数组或对象") { draft = draft.copy(exploreUrl = it) }
                         SourceField("发现列表", draft.ruleExploreList, hint = "ruleExplore.bookList") { draft = draft.copy(ruleExploreList = it) }
                         SourceField("书名", draft.ruleExploreName, hint = "ruleExplore.name") { draft = draft.copy(ruleExploreName = it) }
@@ -1007,6 +1167,17 @@ fun BookSourceScreen(
                         SourceField("详情地址", draft.ruleExploreBookUrl, hint = "ruleExplore.bookUrl") { draft = draft.copy(ruleExploreBookUrl = it) }
                         SourceField("封面", draft.ruleExploreCover, hint = "ruleExplore.coverUrl") { draft = draft.copy(ruleExploreCover = it) }
                         SourceField("简介", draft.ruleExploreIntro, hint = "ruleExplore.intro", multiLine = true) { draft = draft.copy(ruleExploreIntro = it) }
+                    }
+                    6 -> {
+                        SourceDebugPanel(
+                            draft = draft,
+                            keyword = debugKeyword,
+                            onKeywordChange = { debugKeyword = it },
+                            steps = debugSteps,
+                            running = debugRunning,
+                            onRun = { runDebug() },
+                            onStop = { debugJob?.cancel() },
+                        )
                     }
                 }
             }
@@ -1043,7 +1214,12 @@ fun BookSourceScreen(
             onDismiss = { textEditPy = null },
             onSave = { text ->
                 val ok = PyBookSourceManager.writeContent(context, r.name, text)
-                if (ok) null else "保存失败，请重试"
+                // v1.4.28 A3（⑤-R1）：PY 文本编辑保存成功同样作废该源的目录/发现缓存，
+                // 否则改完规则 10 分钟内目录/发现仍读旧缓存（JSON 文本编辑走 updateSourceJson 已有）。
+                if (ok) {
+                    BookSourceManager.invalidateCaches(PyBookSourceManager.SOURCE_KEY_PREFIX + r.name)
+                    null
+                } else "保存失败，请重试"
             },
         )
     }
@@ -1208,6 +1384,103 @@ private fun ImportMenuItem(
 /**
  * v0.214.0：字段编辑器单行（标签 + 输入框 + 字段 key 提示）。
  */
+/** v1.4.28：书源调试每步 30 秒超时。JS 源 java.ajax 取消不掉，该步可能超过 30 秒才返回。 */
+private const val DEBUG_STEP_TIMEOUT_MS = 30_000L
+
+private enum class DebugStatus(val label: String) {
+    IDLE("未开始"),
+    RUNNING("进行中"),
+    OK("成功"),
+    FAILED("失败"),
+    TIMEOUT("超时"),
+}
+
+private data class DebugStep(
+    val name: String,
+    val status: DebugStatus = DebugStatus.IDLE,
+    val requestUrl: String = "",
+    val httpCode: Int? = null,
+    val bodyLength: Int = 0,
+    val bodyPreview: String = "",
+    val previewLabel: String = "预览",
+    val note: String = "",
+    val summary: String = "",
+)
+
+/** v1.4.28：调试预览折叠——与引擎 bodyPreview 同口径（空白折叠成单空格，再截 200 字）。 */
+private fun foldPreview(body: String): String =
+    body.replace(Regex("\\s+"), " ").trim().take(200)
+
+/** v1.4.28：书源调试面板（编辑弹窗第 7 页签）。状态由弹窗持有，切页签不丢。 */
+@Composable
+private fun SourceDebugPanel(
+    draft: BookSource,
+    keyword: String,
+    onKeywordChange: (String) -> Unit,
+    steps: List<DebugStep>,
+    running: Boolean,
+    onRun: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            "对当前未保存的草稿跑四步：搜索 → 详情 → 目录 → 正文；每步 30 秒超时；只做 JSON 源；结果不保存。",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SourceField("调试关键词", keyword, hint = "空则用「${draft.effectiveCheckKeyWord}」") { onKeywordChange(it) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = onRun, enabled = !running, modifier = Modifier.weight(1f)) {
+                Text(if (running) "调试中…" else "开始调试")
+            }
+            if (running) {
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = onStop) { Text("停止") }
+            }
+        }
+        steps.forEachIndexed { index, step ->
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "第 ${index + 1} 步 ${step.name}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        step.status.label,
+                        fontSize = 12.sp,
+                        color = when (step.status) {
+                            DebugStatus.OK -> MaterialTheme.colorScheme.primary
+                            DebugStatus.FAILED, DebugStatus.TIMEOUT -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                if (step.status != DebugStatus.IDLE) {
+                    if (step.requestUrl.isNotBlank()) {
+                        Text("请求：${step.requestUrl}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(
+                        "状态：${step.httpCode?.toString() ?: "—"} · 长度：${step.bodyLength} 字",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (step.bodyPreview.isNotBlank()) {
+                        Text("${step.previewLabel}：${step.bodyPreview}", fontSize = 12.sp)
+                    }
+                    if (step.note.isNotBlank()) {
+                        Text(step.note, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (step.summary.isNotBlank()) {
+                        Text(step.summary, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SourceField(
     label: String,

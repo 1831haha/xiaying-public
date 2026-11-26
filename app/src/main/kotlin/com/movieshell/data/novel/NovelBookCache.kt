@@ -85,12 +85,16 @@ object NovelBookCache {
      * 三步不是原子操作，两次几乎同时的 start() 会各起一个任务。改为在 synchronized(jobs) 里
      * check-and-put：任务以 LAZY 方式创建，先登记进 jobs 再 start()，登记前不会跑、不会先跑完；
      * 结束时只移除自己（remove(key, value)），不误删后起的新任务。
+     * v1.4.28：守卫不能判 isActive——LAZY 任务登记后、start() 之前是 New 态、isActive=false，
+     * 登记→start 的空档里第二个调用方会再登记一个（全量单测跑满负载时 Step4FixTest.a1 两次
+     * 复现 started=2）。改判 containsKey：任务结束时 finally 自删条目，完成后下一次照常能启；
+     * 登记后 start() 同线程紧跟，不存在只登记不启动的孤儿条目。
      * 返回 true=本次真的启动了；false=已有任务在跑，忽略。
      */
     internal fun launchOnce(novelId: String, block: suspend () -> Unit): Boolean {
         val job: Job
         synchronized(jobs) {
-            if (jobs[novelId]?.isActive == true) return false
+            if (jobs.containsKey(novelId)) return false
             job = scope.launch(start = CoroutineStart.LAZY) {
                 try {
                     block()

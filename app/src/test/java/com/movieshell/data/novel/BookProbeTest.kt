@@ -131,4 +131,45 @@ class BookProbeTest {
         assertEquals("SLOW", rec.status)
         assertTrue(rec.ms >= 3000)
     }
+
+    // 1.4.27 闪退修：2117 包“精华书阁”的 bookSourceUrl 是一段鲁迅名言（非 URL），
+    // probeSource 拿它建请求会抛 IllegalArgumentException。根地址无效时应跳过
+    // 根探、直接走搜索回落，绝不抛。
+    @Test fun probeGarbageRootUrlFallsBackToSearch() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200))
+        val src = BookSource(
+            name = "精华书阁",
+            url = "读书无嗜好，就能尽其多。不先泛览群书，则会无所适从或失之偏好，广然后深，博然后专。——鲁迅",
+            searchUrl = "${base()}/s?key={{key}}&page={{page}}",
+        )
+        val rec = BookProbe.probeSource(src) // 不抛
+        assertEquals("OK", rec.status)
+        assertEquals(1, server.requestCount) // 只探了回落，根地址没发请求
+    }
+
+    @Test fun probeGarbageRootUrlWithoutFallbackIsFail() = runBlocking {
+        val src = BookSource(name = "t", url = "读书无嗜好，就能尽其多。")
+        val rec = BookProbe.probeSource(src) // 不抛
+        assertEquals("FAIL", rec.status)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test fun probeGarbageCategoryUrlFallsBackToSearch() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(MockResponse().setResponseCode(200))
+        val src = BookSource(
+            name = "t",
+            url = "${base()}/",
+            // “http:notaurl”会被 resolveUrl 原样返回（以 http 开头），但不是合法
+            // http(s) 地址——分类回落必须跳过它改走搜索，否则建请求会抛。
+            exploreUrl = """[{"title":"都市","url":"http:notaurl"}]""",
+            searchUrl = "${base()}/s?key={{key}}&page={{page}}",
+        )
+        val rec = BookProbe.probeSource(src) // 不抛
+        assertEquals("OK", rec.status)
+        assertEquals(2, server.requestCount)
+        server.takeRequest(5, TimeUnit.SECONDS) // 根地址
+        val fallback = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertTrue(fallback.path!!.contains("key=%E6%96%97%E7%BD%97")) // 走的是搜索回落
+    }
 }

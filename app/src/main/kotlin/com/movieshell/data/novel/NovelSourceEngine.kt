@@ -451,28 +451,58 @@ object NovelSourceEngine {
         return again.page
     }
 
+    /**
+     * v1.4.28：搜索轨迹（书源调试第 1 步用；失败路径字段值见 patch-03 README）。
+     * requestUrl：实际请求的 URL（req 构造失败时 ""）；httpCode：最后一次抓取的 HTTP 状态
+     * （未发请求时 null）；bodyLength/bodyPreview：解析所用正文的长度与前 200 字（空白已折叠）；
+     * results：解析出的书目（失败时空列表）。
+     */
+    data class SearchTrace(
+        val requestUrl: String = "",
+        val httpCode: Int? = null,
+        val bodyLength: Int = 0,
+        val bodyPreview: String = "",
+        val results: List<NovelSearchResult> = emptyList(),
+    )
+
+    /** v1.4.28：search() 的全部逻辑在 searchWithTrace 里，本函数只取 results（行为与改版前一致）。 */
     suspend fun search(
         source: BookSource,
         keyword: String,
         allowGate: Boolean = false,
         pageNum: Int = 1,
-    ): List<NovelSearchResult> {
+    ): List<NovelSearchResult> =
+        searchWithTrace(source, keyword, allowGate, pageNum).results
+
+    /**
+     * v1.4.28：带轨迹的搜索（search() 的本体；书源调试第 1 步直调）。
+     * 判定分支与 search() 改版前一字不动；[recordFailures] 为 false 时不写失败名单、
+     * 不记死站（调试跑 draft 用，不污染正式诊断态）。
+     * 取消（CancellationException）原样抛，不返回 trace。
+     */
+    internal suspend fun searchWithTrace(
+        source: BookSource,
+        keyword: String,
+        allowGate: Boolean = false,
+        pageNum: Int = 1,
+        recordFailures: Boolean = true,
+    ): SearchTrace {
         // v1.4.27（取消修法①，防御收尾）：已取消的协程不进搜索、不写任何诊断态。
         currentCoroutineContext().ensureActive()
         applySourceNetConfig(source)
-        if (source.searchUrl.isBlank() || source.ruleSearchList.isBlank()) return emptyList()
+        if (source.searchUrl.isBlank() || source.ruleSearchList.isBlank()) return SearchTrace()
         if (!isJsSource(source)) {
             val state = LegadoJsEngine.JsState(source.key)
             val ctx = LegadoJsEngine.JsCtx(source = source.toJsRuleSource(), baseUrl = source.url, keyword = keyword, page = pageNum)
             val req = buildSearchReq(source, keyword, ctx, state, pageNum) ?: run {
                 // v1.1.12：搜索地址算不出来是搜失败了，不是“没书”。
-                recordSearchFailure(source.name)
-                return emptyList()
+                if (recordFailures) recordSearchFailure(source.name)
+                return SearchTrace()
             }
             val searchHost = hostOf(req.url)
             if (isHostDead(searchHost)) {
-                recordSearchFailure(source.name)
-                return emptyList()
+                if (recordFailures) recordSearchFailure(source.name)
+                return SearchTrace(requestUrl = req.url)
             }
             var lastOutcome: BookRuleEngine.FetchOutcome? = null
             val html = gatedFetch(source, null, source.url, allowGate) {
@@ -484,16 +514,24 @@ object NovelSourceEngine {
                 // v1.4.27（取消修法①）：取消的协程不记失败、不记死站。
                 currentCoroutineContext().ensureActive()
                 // v1.1.12：页没抓到是搜失败了，不是“没书”——记一笔，搜书页据此分开说。
-                recordSearchFailure(source.name)
-                markDeadHostIfConnectivityError(searchHost, lastOutcome)
-                return emptyList()
+                if (recordFailures) recordSearchFailure(source.name)
+                if (recordFailures) markDeadHostIfConnectivityError(searchHost, lastOutcome)
+                return SearchTrace(requestUrl = req.url, httpCode = lastOutcome?.httpCode)
             }
             val url = req.url
+            // v1.4.28 B2：200 空体是执行失败，不是“没书”——记失败，testSearch 判 Failed；
+            // 真正 0 条（body 非空、解析出 0 条）仍走 Zero。取消的协程不记失败。
+            if (html.isBlank()) {
+                currentCoroutineContext().ensureActive()
+                if (recordFailures) recordSearchFailure(source.name)
+                return SearchTrace(requestUrl = url, httpCode = lastOutcome?.httpCode, bodyLength = html.length, bodyPreview = bodyPreview(html))
+            }
             // v1.2.23：JSON 搜索列表（$.data.content[*] 这类 API 源）走 JSON 解析，不走 CSS
             if (isJsonListRule(source.ruleSearchList)) {
-                return searchJsonItems(html, url, source, ctx, state)
+                val results = searchJsonItems(html, url, source, ctx, state)
+                return SearchTrace(url, lastOutcome?.httpCode, html.length, bodyPreview(html), results)
             }
-            return BookRuleEngine.selectList(html, source.ruleSearchList).mapNotNull { el ->
+            val results = BookRuleEngine.selectList(html, source.ruleSearchList).mapNotNull { el ->
                 val name = BookRuleEngine.extract(el, url, source.ruleSearchName.ifBlank { "@text" })
                 val bookUrl = BookRuleEngine.extract(el, url, source.ruleSearchBookUrl.ifBlank { "a@href" })
                 if (name.isBlank() || bookUrl.isBlank()) return@mapNotNull null
@@ -505,6 +543,7 @@ object NovelSourceEngine {
                     cover = BookRuleEngine.extract(el, url, source.ruleSearchCover).ifBlank { null },
                 )
             }.distinctBy { it.remoteId }
+            return SearchTrace(url, lastOutcome?.httpCode, html.length, bodyPreview(html), results)
         }
         return withContext(Dispatchers.IO) {
             val ua = uaOf(source)
@@ -512,13 +551,13 @@ object NovelSourceEngine {
             val ctx = LegadoJsEngine.JsCtx(source = source.toJsRuleSource(), baseUrl = source.url, keyword = keyword, page = pageNum)
             val req = buildSearchReq(source, keyword, ctx, state, pageNum) ?: run {
                 // v1.1.12：搜索地址算不出来是搜失败了，不是“没书”。
-                recordSearchFailure(source.name)
-                return@withContext emptyList()
+                if (recordFailures) recordSearchFailure(source.name)
+                return@withContext SearchTrace()
             }
             val searchHost = hostOf(req.url)
             if (isHostDead(searchHost)) {
-                recordSearchFailure(source.name)
-                return@withContext emptyList()
+                if (recordFailures) recordSearchFailure(source.name)
+                return@withContext SearchTrace(requestUrl = req.url)
             }
             var lastOutcome: BookRuleEngine.FetchOutcome? = null
             var page = gatedFetch(source, ua, source.url, allowGate) {
@@ -533,9 +572,9 @@ object NovelSourceEngine {
                 // v0.223.0：搜书诊断——未抓到页以前是静默空，记一行才能分清是请求问题还是解析问题。
                 LogBus.w(TAG, "搜书诊断 ${source.name} 未抓到页")
                 // v1.1.12：同上，记一笔失败。
-                recordSearchFailure(source.name)
-                markDeadHostIfConnectivityError(searchHost, lastOutcome)
-                return@withContext emptyList()
+                if (recordFailures) recordSearchFailure(source.name)
+                if (recordFailures) markDeadHostIfConnectivityError(searchHost, lastOutcome)
+                return@withContext SearchTrace(requestUrl = req.url, httpCode = lastOutcome?.httpCode)
             }
             // v0.209.0：登录后重抓也过验证通道——999 这类源先握手再被墙时，
             // 原直接重抓拿不到页又不弹窗，搜索静默为空。
@@ -554,16 +593,22 @@ object NovelSourceEngine {
                 }
             })
             val pageCtx = ctx.copy(baseUrl = page.url)
+            // v1.4.28 B2：同上，JS 路径空体也记失败（runLoginCheck 之后、解析之前判）。
+            if (page.body.isBlank()) {
+                currentCoroutineContext().ensureActive()
+                if (recordFailures) recordSearchFailure(source.name)
+                return@withContext SearchTrace(requestUrl = page.url, httpCode = lastOutcome?.httpCode, bodyLength = page.body.length, bodyPreview = bodyPreview(page.body))
+            }
             // v1.2.23：JSON 搜索列表（$.data.content[*] 这类 API 源）走 JSON 解析，不走 CSS
             if (isJsonListRule(source.ruleSearchList)) {
                 val results = searchJsonItems(page.body, page.url, source, pageCtx, state)
                 LogBus.d(TAG, "搜书诊断 ${source.name} 校验前长=$beforeLoginLen 校验后长=${page.body.length} JSON 解析出 ${results.size} 条")
-                return@withContext results
+                return@withContext SearchTrace(page.url, lastOutcome?.httpCode, page.body.length, bodyPreview(page.body), results)
             }
             val items = LegadoJsEngine.evalListRule(page.body, page.url, source.ruleSearchList, pageCtx, state)
             // v0.223.0：搜书诊断——只记长度与条数，不记正文；校验前后长度一变就说明 1234 握手改写了页。
             LogBus.d(TAG, "搜书诊断 ${source.name} 校验前长=$beforeLoginLen 校验后长=${page.body.length} 解析出 ${items.size} 条")
-            items.mapNotNull { el ->
+            val results = items.mapNotNull { el ->
                 val name = LegadoJsEngine.evalTextRule(el, page.url, source.ruleSearchName.ifBlank { "@text" }, pageCtx, state)
                 val bookUrl = LegadoJsEngine.evalTextRule(el, page.url, source.ruleSearchBookUrl.ifBlank { "a@href" }, pageCtx, state)
                 if (name.isBlank() || bookUrl.isBlank()) return@mapNotNull null
@@ -575,8 +620,13 @@ object NovelSourceEngine {
                     cover = LegadoJsEngine.evalTextRule(el, page.url, source.ruleSearchCover, pageCtx, state).ifBlank { null },
                 )
             }.distinctBy { it.remoteId }
+            SearchTrace(page.url, lastOutcome?.httpCode, page.body.length, bodyPreview(page.body), results)
         }
     }
+
+    /** v1.4.28：正文前 200 字预览——空白折叠成单空格（与章内搜索 \n→空格对齐），再截 200 字。 */
+    private fun bodyPreview(body: String): String =
+        body.replace(Regex("\\s+"), " ").trim().take(200)
 
     /**
      * v1.4.27：书源搜索测试（书源管理页行内 ▶ 用；UI 在自己的 testMutex 锁内调用，

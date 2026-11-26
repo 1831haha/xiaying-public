@@ -110,6 +110,7 @@ import com.movieshell.data.novel.BookSourceManager
 import com.movieshell.data.novel.NovelSourceEngine
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.novel.TxtImporter
+import com.movieshell.data.novel.EpubImporter
 import com.movieshell.data.store.BookGroup
 import com.movieshell.data.store.BookshelfGroupStore
 import com.movieshell.data.novel.NovelDirectoryFill
@@ -383,21 +384,18 @@ fun BookshelfScreen(
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    // v1.3.33：只认 .txt——选择器已是 text/plain，但部分文件管理器
-                    // 不按 MIME 过滤，EPUB 混进来读不到有效文本才报错太晚；这里按
-                    // 文件名后缀再拦一次，非 .txt 直接拒收（EPUB 支持以后再做）。
+                    // v1.4.28：.txt 与 .epub 都认——选择器已是 */*，但部分文件管理器
+                    // 不按 MIME 过滤，这里按文件名后缀再拦一次（沿用 v1.3.33 的口径）。
                     val displayName = context.contentResolver.query(uri, null, null, null, null)?.use { c ->
                         val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                         if (i >= 0 && c.moveToFirst()) c.getString(i) else null
                     }
-                    if (displayName != null && !displayName.endsWith(".txt", ignoreCase = true)) {
+                    val namedIsEpub = displayName?.endsWith(".epub", ignoreCase = true) == true
+                    val namedIsTxt = displayName?.endsWith(".txt", ignoreCase = true) == true
+                    if (displayName != null && !namedIsEpub && !namedIsTxt) {
                         return@runCatching "not_txt"
                     }
                     // v0.294.5：文件名清洗 + 规范路径校验，防路径穿越写出缓存目录
-                    val name = SafeFileName.importName(
-                        displayName,
-                        "导入小说.txt",
-                    )
                     val tmp = File(context.cacheDir, "import_${System.currentTimeMillis()}.txt")
                     val inputStream = context.contentResolver.openInputStream(uri)
                     if (inputStream == null) {
@@ -408,6 +406,17 @@ fun BookshelfScreen(
                     inputStream.use { input ->
                         tmp.outputStream().use { input.copyTo(it) }
                     }
+                    // v1.4.28（②-R7）：displayName 为空时默认名不能写死 .txt——
+                    // 按内容嗅探：epub 是 zip（PK 开头）就默认 .epub，否则默认 .txt。
+                    val sniffEpub = displayName == null && runCatching {
+                        val head = ByteArray(2)
+                        tmp.inputStream().use { it.read(head) == 2 } &&
+                            head.contentEquals(byteArrayOf(0x50, 0x4B))
+                    }.getOrDefault(false)
+                    val name = SafeFileName.importName(
+                        displayName,
+                        if (sniffEpub) "导入小说.epub" else "导入小说.txt",
+                    )
                     val named = SafeFileName.childInside(context.cacheDir, name)
                         ?: run { tmp.delete(); return@runCatching "failed" }
                     // v0.218.0（S19）：先清掉上次残留的同名文件，否则改名
@@ -418,7 +427,12 @@ fun BookshelfScreen(
                         tmp.delete()
                         return@runCatching "failed"
                     }
-                    val imported = TxtImporter.import(named)
+                    val imported = if (name.endsWith(".epub", ignoreCase = true)) {
+                        // v1.4.28：epub 走新解析器，封面落 filesDir/epub_covers。
+                        EpubImporter.import(named, File(context.filesDir, "epub_covers"))
+                    } else {
+                        TxtImporter.import(named)
+                    }
                     named.delete()
                     if (imported == null) return@runCatching "invalid"
                     // v0.216.0（C10）：本地判重只看书名会把同名不同书当成同一本。
@@ -442,7 +456,7 @@ fun BookshelfScreen(
             PluginUi.toast(context, when (result) {
                 "added" -> "已加入书架"
                 "exists" -> "已在书架，跳过重复导入"
-                "not_txt" -> "只支持 .txt 文件，请重新选择"
+                "not_txt" -> "只支持 .txt / .epub 文件，请重新选择"
                 "invalid" -> "导入失败：读不到有效文本"
                 else -> "导入失败：保存失败"
             })
@@ -542,7 +556,7 @@ fun BookshelfScreen(
                         ) {
                             GlassMenuItem(Icons.Outlined.UploadFile, if (importing) "导入中…" else "添加本地书籍", onClick = {
                                 showTopMenu = false
-                                if (!importing) pickTxt.launch("text/plain")
+                                if (!importing) pickTxt.launch("*/*")
                             })
                             GlassMenuItem(
                                 Icons.AutoMirrored.Filled.Sort, "排序",
@@ -702,7 +716,7 @@ fun BookshelfScreen(
                     item {
                         BookshelfEmptyState(
                             onFindBook = { searching = true },
-                            onImportTxt = { pickTxt.launch("text/plain") },
+                            onImportTxt = { pickTxt.launch("*/*") },
                         )
                     }
                 }

@@ -56,4 +56,35 @@ class SourceRowTest {
         assertFalse("json:hidden2" in r)
         assertEquals(setOf("x"), SourceRow.selectAllVisible(emptySet(), listOf("x", "x")))
     }
+
+    // v1.4.28 A4：反选只翻转可见行，折叠组里藏起来的行保持原样。
+    @Test fun invertVisibleKeepsHiddenSelections() {
+        val selected = setOf("json:hidden1", "json:hidden2", "json:a")
+        val visible = listOf("json:a", "json:b")
+        assertEquals(setOf("json:hidden1", "json:hidden2", "json:b"), SourceRow.invertVisible(selected, visible))
+    }
+
+    @Test fun invertVisibleFlipsVisible() {
+        assertEquals(setOf("json:a", "json:b"), SourceRow.invertVisible(emptySet(), listOf("json:a", "json:b")))
+        assertEquals(emptySet<String>(), SourceRow.invertVisible(setOf("json:a", "json:b"), listOf("json:a", "json:b")))
+    }
+
+    @Test fun invertVisibleEmptySelection() {
+        assertEquals(setOf("x", "y"), SourceRow.invertVisible(emptySet(), listOf("x", "y")))
+        assertEquals(setOf("json:a"), SourceRow.invertVisible(setOf("json:a"), emptyList()))
+    }
+
+    // v1.4.28 B1：PY 区段头只数过滤后列表里启用了的，不数未过滤全量。
+    @Test fun enabledPyCountUsesFilteredList() {
+        val rules = listOf(
+            PyBookSourceManager.PyBookRule(name = "a", title = "A", sizeKb = 1),
+            PyBookSourceManager.PyBookRule(name = "b", title = "B", sizeKb = 1),
+            PyBookSourceManager.PyBookRule(name = "c", title = "C", sizeKb = 1),
+        )
+        val enabled = setOf("a", "b")
+        // 过滤后只剩 b（启用）与 c（未启用），应数 1 而不是全量的 2。
+        assertEquals(1, SourceRow.enabledPyCount(listOf(rules[1], rules[2]), enabled))
+        assertEquals(2, SourceRow.enabledPyCount(rules, enabled))
+        assertEquals(0, SourceRow.enabledPyCount(emptyList(), enabled))
+    }
 }

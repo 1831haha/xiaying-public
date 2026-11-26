@@ -105,15 +105,24 @@ object BookProbe {
      */
     suspend fun probeSource(source: BookSource): BookProbeRecord {
         val start = System.currentTimeMillis()
-        val rootRequest = Request.Builder().url(source.url).header("User-Agent", DEFAULT_UA).build()
-        val code = try {
-            probeCode(rootRequest)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return BookProbeRecord("FAIL", 0L, System.currentTimeMillis(), source.url)
+        // 1.4.27 闪退修：源地址可能是非 URL 文本（如 2117 包“精华书阁”的
+        // bookSourceUrl 是一段鲁迅名言），Request.Builder().url() 会直接抛
+        // IllegalArgumentException——且它发生在下面的 try 之外，书源管理页
+        // 一进就崩。根地址建不出请求时跳过根探、直接走回落；回落也没有才记
+        // FAIL，绝不抛（取消仍原样抛）。
+        val rootRequest = runCatching {
+            Request.Builder().url(source.url).header("User-Agent", DEFAULT_UA).build()
+        }.getOrNull()
+        if (rootRequest != null) {
+            val code = try {
+                probeCode(rootRequest)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return BookProbeRecord("FAIL", 0L, System.currentTimeMillis(), source.url)
+            }
+            if (code != 404) return recordFor(code, System.currentTimeMillis() - start, source.url)
         }
-        if (code != 404) return recordFor(code, System.currentTimeMillis() - start, source.url)
         val fallback = fallbackProbeRequest(source)
             ?: return BookProbeRecord("FAIL", 0L, System.currentTimeMillis(), source.url)
         val code2 = try {
@@ -135,8 +144,12 @@ object BookProbe {
     private fun fallbackProbeRequest(source: BookSource): Request? {
         val category = NovelSourceEngine.parseExploreCategories(source.exploreUrl).firstOrNull()
         if (category != null) {
-            NovelSourceEngine.evalCategoryUrl(source, category.url, 1)?.let {
-                return Request.Builder().url(it).header("User-Agent", DEFAULT_UA).build()
+            val categoryUrl = NovelSourceEngine.evalCategoryUrl(source, category.url, 1)
+            // 同上：模板求值结果也可能不是 http(s) 地址，建请求前先验 scheme。
+            if (categoryUrl != null && (categoryUrl.startsWith("http://") || categoryUrl.startsWith("https://"))) {
+                runCatching {
+                    Request.Builder().url(categoryUrl).header("User-Agent", DEFAULT_UA).build()
+                }.getOrNull()?.let { return it }
             }
         }
         if (source.searchUrl.isBlank()) return null
