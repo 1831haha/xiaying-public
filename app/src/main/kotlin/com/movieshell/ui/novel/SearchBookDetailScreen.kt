@@ -60,11 +60,13 @@ import com.movieshell.domain.model.BookDetailInfo
 import com.movieshell.domain.model.NovelSearchResult
 import com.movieshell.data.novel.NovelSourceEngine
 import com.movieshell.data.novel.PyBookSourceManager
-import com.movieshell.data.novel.NovelDirectoryFill
+import com.movieshell.data.novel.NovelTocService
+import com.movieshell.data.novel.TocGap
 import com.movieshell.data.store.NovelStore
 import com.movieshell.ui.components.AppToast
 import com.movieshell.ui.reader.ReaderJumpRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -92,6 +94,9 @@ fun SearchBookDetailScreen(
         if (isPy) null else jsonSources.firstOrNull { it.key == group.key }
     }
 
+    // v1.4.27 Step4 审稿 A6：非 JS 的 JSON 源才可“展开全部”（源找不到按不可展开）。
+    val sourceExpandable = remember(source) { source?.let { !NovelSourceEngine.isJsBookSource(it) } == true }
+
     var detail by remember { mutableStateOf<BookDetailInfo?>(null) }
     var chapterTitles by remember { mutableStateOf<List<String>?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -103,6 +108,10 @@ fun SearchBookDetailScreen(
     var pendingRead by remember { mutableStateOf<Int?>(null) }
     // v0.249.0 收尾：等目录时的按钮反馈（“正在获取目录…”），返回即取消等待、后台补取继续。
     var waitingDir by remember { mutableStateOf(false) }
+    // v1.4.27 P0.3：目录缺段（章号中段跳了一大截）与“展开全部”进行中
+    var tocGap by remember { mutableStateOf<TocGap.Gap?>(null) }
+    var expanding by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     val title = detail?.name?.takeIf { it.isNotBlank() } ?: item.title
     // v0.230.0：搜书结果的 author 自带“作者：”前缀（999 搜索规则原样带出），详情页已有“作者”标签列，去掉前缀防“作者 作者：…”重复。
@@ -121,11 +130,14 @@ fun SearchBookDetailScreen(
     suspend fun remoteTitles(): List<String>? = withContext(Dispatchers.IO) {
         // v0.232.0：拉目录失败只该显示“加载目录失败”，绝不能崩 App——
         // 09:46:10 的崩溃就是这条没兜：chapters() 一抛，LaunchedEffect 直接把 App 带走；入架链路有 runCatching 兜着才只变 toast。
-        runCatching {
-            val engine = NovelSourceEngine.novelEngineForKey(context, item.sourceKey)
-                ?: return@runCatching null
-            engine.chapters(item).map { it.title }.takeIf { it.isNotEmpty() }
-        }.getOrNull()
+        // v1.4.27 解缠⑤：详情页只读目录服务、不自己抓（服务内部已兜异常，取消原样抛）；
+        // 用户点“重试”（tocRetry>0）时强制现抓。服务缓存的目录入架时直接复用，不再整本重抓。
+        when (val st = NovelTocService.remote(context, item.sourceKey, item, force = tocRetry > 0)) {
+            is NovelTocService.TocState.Ready -> st.chapters.map { it.title }
+            // v1.4.27 P0.3：缺段照常显示已有章节，另给提示与“展开全部”
+            is NovelTocService.TocState.Partial -> st.chapters.map { it.title }
+            else -> null
+        }
     }
 
     LaunchedEffect(group.key, item.remoteId, tocRetry, source) {
@@ -142,6 +154,7 @@ fun SearchBookDetailScreen(
         } else {
             remoteTitles()
         }
+        tocGap = chapterTitles?.let { TocGap.detect(it) }
         loading = false
     }
 
@@ -168,7 +181,7 @@ fun SearchBookDetailScreen(
         // 等待可感知（按钮变“正在获取目录…”）、可退出（返回即取消本效应，后台补取继续）。
         waitingDir = true
         try {
-            if (!NovelDirectoryFill.awaitReady(context, sid)) {
+            if (!NovelTocService.awaitReady(context, sid)) {
                 AppToast.show(context, "目录获取失败，请在书架中重试", long = false)
                 pendingRead = null
                 return@LaunchedEffect
@@ -311,6 +324,50 @@ fun SearchBookDetailScreen(
                                 }
                             },
                         )
+                        // v1.4.27 P0.3：目录可能不全——如实提示；未入架的 JSON 源给“展开全部”
+                        // （只跟页上的普通展开链接与目录分页规则；靠网页脚本展开的站本版拿不到）。
+                        // v1.4.27 Step 4b：缺段提示换样式（TocGapHint：琥珀色提示条＋文字链「展开全部」），行为不变。
+                        tocGap?.let { gap ->
+                            TocGapHint(
+                                gap = gap,
+                                expanding = expanding,
+                                // v1.4.27 Step4 审稿 A6：JS 源（以及源已删）不给「展开全部」——expandAll 对它们只会回 Unsupported。
+                                // NovelSourceEngine.isJsSource 是 private，用同文件公开的等价包装 isJsBookSource。
+                                canExpand = shelfId == null && !isPy && sourceExpandable,
+                                modifier = Modifier.padding(top = 6.dp),
+                                onExpand = {
+                                    expanding = true
+                                    scope.launch {
+                                        try {
+                                            val before = chapterTitles?.size ?: 0
+                                            when (val r = NovelTocService.expandAll(context, item.sourceKey, item, before)) {
+                                                is NovelTocService.ExpandResult.Improved -> {
+                                                    val st = r.state
+                                                    val metas = when (st) {
+                                                        is NovelTocService.TocState.Ready -> st.chapters
+                                                        is NovelTocService.TocState.Partial -> st.chapters
+                                                        else -> null
+                                                    }
+                                                    if (metas != null) {
+                                                        chapterTitles = metas.map { it.title }
+                                                        tocGap = (st as? NovelTocService.TocState.Partial)?.gap
+                                                    }
+                                                    AppToast.show(context, "已展开：${r.before} 章 → ${r.after} 章" + if (tocGap != null) "，仍可能不全" else "", long = false)
+                                                }
+                                                NovelTocService.ExpandResult.NoMore ->
+                                                    AppToast.show(context, "没能展开：本站完整目录要靠网页脚本加载，暂不支持，可换源", long = true)
+                                                NovelTocService.ExpandResult.Unsupported ->
+                                                    AppToast.show(context, "这个书源暂不支持展开全部，可换源", long = false)
+                                                NovelTocService.ExpandResult.Failed ->
+                                                    AppToast.show(context, "展开失败，请重试", long = false)
+                                            }
+                                        } finally {
+                                            expanding = false
+                                        }
+                                    }
+                                },
+                            )
+                        }
                     }
                     Spacer(Modifier.height(12.dp))
                 }

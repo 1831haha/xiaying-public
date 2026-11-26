@@ -714,4 +714,36 @@ object NovelStore {
             }
         }
 
+    /**
+     * v1.4.27 P0.1 整本缓存：批量写正文（一次读改写整份章节文件，避免逐章重写 2000 次）。
+     * [contents]：过滤导航章后的下标 → (章节地址, 正文)。**地址对不上的章不写**——
+     * 下载途中书被换源、目录被替换时，旧源正文绝不写进新目录的同号章节。
+     * 返回实际写入的章数；文件不存在或读坏返回 0。
+     */
+    suspend fun updateChapterContents(
+        context: Context,
+        novelId: String,
+        contents: Map<Int, Pair<String, String>>,
+    ): Int = withContext(Dispatchers.IO) {
+        if (contents.isEmpty()) return@withContext 0
+        indexMutex.withLock {
+            runCatching {
+                val f = chaptersFile(context, novelId)
+                if (!f.isFile) return@runCatching 0
+                val list = json.decodeFromString(ListSerializer(Chapter.serializer()), f.readText())
+                val visible = list.filterNot { isNavChapterTitle(it.title) }
+                val byRawIndex = HashMap<Int, String>()
+                contents.forEach { (pos, pair) ->
+                    val target = visible.getOrNull(pos) ?: return@forEach
+                    if (target.url != pair.first || pair.second.isBlank()) return@forEach
+                    byRawIndex[target.index] = pair.second
+                }
+                if (byRawIndex.isEmpty()) return@runCatching 0
+                val updated = list.map { c -> byRawIndex[c.index]?.let { c.copy(content = it) } ?: c }
+                AtomicFile.writeText(f, json.encodeToString(ListSerializer(Chapter.serializer()), updated))
+                byRawIndex.size
+            }.onFailure { Log.w(TAG, "批量正文缓存失败", it) }.getOrDefault(0)
+        }
+    }
+
 }

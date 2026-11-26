@@ -98,7 +98,8 @@ object NovelDirectoryFill {
             author = novel.author,
         )
         val engine = NovelSourceEngine.novelEngineForKey(context, novel.sourceKey) ?: return null
-        return engine.chapters(probe).ifEmpty { null }
+        // v1.4.27 解缠⑤：抓取统一走目录服务（书架恢复要现抓，不读缓存）。
+        return NovelTocService.fetchChapters(engine, novel.sourceKey, probe).ifEmpty { null }
     }
 
     /** 兜底路径（仅老数据无 remoteId）：标题精确匹配，作者优先；
@@ -120,24 +121,13 @@ object NovelDirectoryFill {
             preferred.isEmpty() && exact.size == 1 -> exact.first()
             else -> return null
         }
-        return engine.chapters(best).ifEmpty { null }
+        return NovelTocService.fetchChapters(engine, novel.sourceKey, best).ifEmpty { null }
     }
 
     /** 等目录就绪：READY 立刻 true；LOADING 轮询至终态；FAILED／超时／书不在架 false。 */
-    suspend fun awaitReady(context: Context, novelId: String, timeoutMs: Long = 30_000): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (true) {
-            when (NovelStore.get(context, novelId)?.dirState) {
-                NovelStore.DIR_READY -> return true
-                NovelStore.DIR_FAILED -> return false
-                null -> return false
-                else -> {
-                    if (System.currentTimeMillis() >= deadline) return false
-                    delay(500)
-                }
-            }
-        }
-    }
+    // v1.4.27 解缠⑤：实现搬到 NovelTocService.awaitReady（目录单服务），这里只转发，签名不动。
+    suspend fun awaitReady(context: Context, novelId: String, timeoutMs: Long = 30_000): Boolean =
+        NovelTocService.awaitReady(context, novelId, timeoutMs)
 
     private fun launchDeduped(context: Context, novelId: String, block: suspend () -> Unit) {
         synchronized(jobs) {
@@ -176,11 +166,24 @@ object NovelDirectoryFill {
     ): Pair<List<ChapterMeta>, String?> {
         var lastMetas: List<ChapterMeta> = emptyList()
         var lastCover = cover
+        // v1.4.27 解缠⑤：详情页刚抓过的目录（服务缓存 10 分钟内）直接用，不整本重抓；
+        // 封面补取照旧（搜索没封面时才多一次详情页请求）。
+        NovelTocService.cachedChapters(sourceKey, item.remoteId)?.let { cached ->
+            var c = cover
+            if (c.isNullOrBlank()) {
+                c = runCatching {
+                    NovelSourceEngine.withSearchThrottle {
+                        NovelSourceEngine.novelEngineForKey(context, sourceKey)?.detailCover(item)
+                    }
+                }.onFailure { if (it is CancellationException) throw it }.getOrNull() ?: c
+            }
+            return cached to c
+        }
         repeat(2) { attempt ->
             val (ms, cv) = NovelSourceEngine.withSearchThrottle {
                 val engine = NovelSourceEngine.novelEngineForKey(context, sourceKey)
                     ?: return@withSearchThrottle emptyList<ChapterMeta>() to cover
-                val m = engine.chapters(item)
+                val m = NovelTocService.fetchChapters(engine, sourceKey, item)
                 // v0.200.0：搜索没封面时，用详情封面 JS 补一张（只多一次详情页请求）；
                 // PY 源没有详情封面链，detailCover 回 null，原样保留旧封面。
                 var c = cover

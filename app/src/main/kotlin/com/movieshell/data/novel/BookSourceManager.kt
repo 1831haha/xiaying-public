@@ -141,7 +141,23 @@ object BookSourceManager {
     suspend fun remove(context: Context, key: String) = mutex.withLock {
         val old = _sources.value
         _sources.value = old.filterNot { it.key == key }
-        if (!save(context)) _sources.value = old
+        if (!save(context)) {
+            _sources.value = old
+        } else {
+            invalidateCaches(key)
+        }
+    }
+
+    /**
+     * v1.4.27 Step4 审稿 A3：书源规则变了（编辑保存）或源没了（删除，含批量删——批量删逐条走 [remove]），
+     * 作废该源的发现页缓存与目录缓存（两者都按 sourceKey 前缀清），旧规则抓到的结果不再被复用。
+     * key 变了时新旧 key 都清。只清内存缓存，不碰书架与磁盘。
+     */
+    internal fun invalidateCaches(vararg keys: String) {
+        keys.toSet().forEach { k ->
+            NovelExploreLoader.invalidateSource(k)
+            NovelTocService.invalidateSource(k)
+        }
     }
 
     /**
@@ -205,6 +221,7 @@ object BookSourceManager {
             else Log.w(TAG, "书源地址迁移失败，且旧书源回滚写盘失败：内存与磁盘不一致")
             return@withLock false
         }
+        invalidateCaches(oldKey, updated.key)
         true
     }
 
@@ -231,6 +248,7 @@ object BookSourceManager {
             else Log.w(TAG, "书源地址迁移失败，且旧书源回滚写盘失败：内存与磁盘不一致")
             return@withLock false
         }
+        invalidateCaches(oldKey, parsed.key)
         true
     }
 

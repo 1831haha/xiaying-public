@@ -9,16 +9,26 @@ import com.movieshell.core.net.SearchRequest
 import com.movieshell.core.net.SourceThrottle
 import com.movieshell.core.net.decodeBytes
 import com.movieshell.core.net.parseUrlOptions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.io.IOException
 import java.nio.charset.Charset
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resumeWithException
 
 /**
  * v0.61.0 书源规则引擎：OkHttp 抓取 + Jsoup CSS 解析。
@@ -78,6 +88,36 @@ object BookRuleEngine {
     private fun hostOf(url: String): String =
         runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
 
+    /**
+     * v1.4.27（取消修法②）：可取消的请求执行——阅读 OkHttpUtils `Call.await()` 同款。
+     * 协程取消（如 testSearch 的 withTimeoutOrNull 到点、换源/退页）立即 `call.cancel()`，
+     * socket 当场断开，重试拦截器里的 `isCanceled()` 检查随之生效（不再跑满 3 次重试）。
+     * - onFailure：已取消的 continuation 不再 resume（BookProbe.probeCode 同款 isActive 守卫）；
+     * - onResponse：已取消直接关响应、不 resume；交付途中被取消由 resume 的
+     *   onCancellation 回调关响应，不泄漏连接；
+     * - 只 resume(response)，不在回调线程读 body——body 仍在调用方 withContext(Dispatchers.IO)
+     *   的 `.use {}` 里读，不占 OkHttp Dispatcher 线程（maxRequestsPerHost=5）。
+     * resume(value, onCancellation) 在 kotlinx-coroutines 1.8 仍标 ExperimentalCoroutinesApi，显式 OptIn。
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun Call.awaitResponse(): Response =
+        suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { this@awaitResponse.cancel() }
+            enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) cont.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (cont.isActive) {
+                        cont.resume(response) { response.close() }
+                    } else {
+                        response.close()
+                    }
+                }
+            })
+        }
+
     suspend fun getHtml(url: String, ua: String? = null, options: FetchOptions = FetchOptions()): String? =
         fetchPage(url, ua, options = options)?.body
 
@@ -106,6 +146,8 @@ object BookRuleEngine {
         referer: String? = null,
         options: FetchOptions = FetchOptions(),
     ): FetchOutcome = withContext(Dispatchers.IO) {
+        // v1.4.27（取消修法②）：已取消的协程进来就抛——不跑 throttle、不建 Call。
+        currentCoroutineContext().ensureActive()
         val host = hostOf(url)
         SourceThrottle.throttle(host)
         runCatching {
@@ -117,14 +159,18 @@ object BookRuleEngine {
                 .apply { if (!referer.isNullOrBlank()) header("Referer", referer) }
                 .apply { options.headers.forEach { (k, v) -> header(k, v) } }
                 .build()
-            clientFor(options.timeoutMs).newCall(req).execute().use { resp ->
+            clientFor(options.timeoutMs).newCall(req).awaitResponse().use { resp ->
                 if (resp.code == 403 || resp.code == 429) SourceThrottle.penalize(host)
                 else if (resp.isSuccessful) SourceThrottle.clearPenalty(host)
                 if (!resp.isSuccessful) return@use FetchOutcome(null, resp.code)
                 val bytes = resp.body?.bytes() ?: return@use FetchOutcome(null, resp.code)
                 FetchOutcome(PageResult(decodeBytes(bytes), resp.request.url.toString()), resp.code)
             }
-        }.onFailure { LogBus.w(TAG, "抓取失败 $url ${it.javaClass.simpleName}: ${it.message}") }
+        }.onFailure {
+            // v1.4.27（取消修法②）：runCatching 会吞取消——显式重抛，取消不算抓取失败、不记日志。
+            if (it is CancellationException) throw it
+            LogBus.w(TAG, "抓取失败 $url ${it.javaClass.simpleName}: ${it.message}")
+        }
             .getOrElse { FetchOutcome(null, null, it) }
     }
 
@@ -166,6 +212,8 @@ object BookRuleEngine {
         ua: String? = null,
         options: FetchOptions = FetchOptions(),
     ): FetchOutcome = withContext(Dispatchers.IO) {
+        // v1.4.27（取消修法②）：同 fetchPageOutcome，已取消进来就抛。
+        currentCoroutineContext().ensureActive()
         val host = hostOf(request.url)
         SourceThrottle.throttle(host)
         runCatching {
@@ -182,14 +230,18 @@ object BookRuleEngine {
                 val mediaType = "application/x-www-form-urlencoded".toMediaType()
                 builder.post(request.body.toByteArray(charset).toRequestBody(mediaType))
             }
-            clientFor(options.timeoutMs).newCall(builder.build()).execute().use { resp ->
+            clientFor(options.timeoutMs).newCall(builder.build()).awaitResponse().use { resp ->
                 if (resp.code == 403 || resp.code == 429) SourceThrottle.penalize(host)
                 else if (resp.isSuccessful) SourceThrottle.clearPenalty(host)
                 if (!resp.isSuccessful) return@use FetchOutcome(null, resp.code)
                 val bytes = resp.body?.bytes() ?: return@use FetchOutcome(null, resp.code)
                 FetchOutcome(PageResult(decodeBytes(bytes), resp.request.url.toString()), resp.code)
             }
-        }.onFailure { LogBus.w(TAG, "搜索抓取失败 ${request.url} ${it.javaClass.simpleName}: ${it.message}") }.getOrNull() ?: FetchOutcome(null, null)
+        }.onFailure {
+            // v1.4.27（取消修法②）：同 fetchPageOutcome，取消原样抛出。
+            if (it is CancellationException) throw it
+            LogBus.w(TAG, "搜索抓取失败 ${request.url} ${it.javaClass.simpleName}: ${it.message}")
+        }.getOrNull() ?: FetchOutcome(null, null)
     }
 
     /** 在 root 下按规则提字段。返回空字符串表示没提出来。 */
@@ -240,6 +292,25 @@ object BookRuleEngine {
         val doc = parseDoc(html, pageUrl)
         val base = pageUrl.substringBefore("#")
         return doc.select("a:contains(目录)").firstNotNullOfOrNull { el ->
+            val href = el.absUrl("href").substringBefore("#")
+            if (href.isBlank() || href == base) null else href
+        }
+    }
+
+    /** v1.4.27 P0.3：“展开全部”类链接文案（只认普通链接，javascript: / 本页锚点不算）。 */
+    private val EXPAND_TOC_TEXT = Regex("展开全部|全部章节|查看全部|完整目录|更多章节|查看更多章节|点击查看全部|全部目录")
+
+    /**
+     * v1.4.27 P0.3：找目录页上“展开全部 / 全部章节 / 完整目录”这类**普通链接**的绝对地址；
+     * 没有、或只是 javascript: / 指回本页（含锚点）的返回 null——那种站要网页脚本展开，本版不支持。
+     */
+    fun findExpandTocLink(html: String, pageUrl: String): String? {
+        val doc = parseDoc(html, pageUrl)
+        val base = pageUrl.substringBefore("#")
+        return doc.select("a[href]").firstNotNullOfOrNull { el ->
+            if (!EXPAND_TOC_TEXT.containsMatchIn(el.text())) return@firstNotNullOfOrNull null
+            val raw = el.attr("href").trim()
+            if (raw.startsWith("javascript", ignoreCase = true) || raw.startsWith("#")) return@firstNotNullOfOrNull null
             val href = el.absUrl("href").substringBefore("#")
             if (href.isBlank() || href == base) null else href
         }

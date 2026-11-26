@@ -1,5 +1,16 @@
 package com.movieshell.ui.reader
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.automirrored.filled.Comment
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.filled.MoreVert
+import com.movieshell.ui.novel.GlassMenu
+import com.movieshell.ui.novel.NovelMotion
+import com.movieshell.ui.novel.novelClickable
+import com.movieshell.ui.novel.GlassMenuItem
+import com.movieshell.ui.novel.rememberReduceMotion
 import com.movieshell.ui.components.AppSearchBar
 import android.app.Activity
 import android.graphics.Typeface
@@ -107,10 +118,8 @@ import com.movieshell.domain.model.ReadingProgress
 import com.movieshell.data.novel.BookSourceManager
 import com.movieshell.domain.model.ChapterMeta
 import com.movieshell.domain.model.ContentFail
-import com.movieshell.domain.model.ContentResult
-import com.movieshell.data.novel.NovelPurifyEngine
+import com.movieshell.data.novel.NovelContentService
 import com.movieshell.data.novel.NovelSourceEngine
-import com.movieshell.data.novel.PurifyRuleStore
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.store.Bookmark
 import com.movieshell.data.store.BookmarkStore
@@ -360,33 +369,28 @@ fun ReaderScreen(
         val c = chapters.getOrNull(index) ?: return ContentFail.UNKNOWN
         if ((!force && c.content.isNotBlank()) || c.url.isBlank()) return null
         val n = novel ?: return ContentFail.UNKNOWN
-        val result = runCatching {
-            val engine = NovelSourceEngine.novelEngineForKey(context, n.sourceKey)
-                ?: return@runCatching ContentResult.Failed(ContentFail.UNKNOWN)
-            engine.content(ChapterMeta(index, c.title, c.url), allowGate)
-        }.onFailure { if (it is CancellationException) throw it }
-            .getOrElse { ContentResult.Failed(ContentFail.UNKNOWN) }
-        val text = when (result) {
-            is ContentResult.Ok -> result.text
-            is ContentResult.Failed -> return result.reason
-        }
-        if (text.isNotBlank()) {
-            // v0.95.0：正文统一过净化引擎再入库（规则见净化规则管理页）
-            val rules = PurifyRuleStore.list(context)
-            val clean = NovelPurifyEngine.purify(text, rules, bookUrl = n.id, sourceKey = n.sourceKey)
-            // v0.251.0：净化后空白不写盘、不覆盖旧正文——空白写盘是重复拉取循环的根因；
-            // 原文只暂存本次会话，查看原文入口用，绝不写回缓存。
-            if (clean.isBlank()) {
-                LogBus.d("Reader", "净化后空白不写盘 chapter=$index rawLen=${text.length}")
-                purifyFallbackText = text
-                purifyFallbackIndex = index
-                return ContentFail.PURIFY_EMPTY
+        // v1.4.27 解缠③：拉正文→全局净化→空白保护→写盘统一走 NovelContentService（单入口），
+        // 本处只管把结果落到阅读器内存态；顺序与口径见 NovelContentService 注释。
+        val engine = runCatching { NovelSourceEngine.novelEngineForKey(context, n.sourceKey) }
+            .onFailure { if (it is CancellationException) throw it }
+            .getOrNull() ?: return ContentFail.UNKNOWN
+        return when (
+            val r = NovelContentService.fetchAndStore(
+                context, engine, n.id, n.sourceKey, ChapterMeta(index, c.title, c.url), allowGate,
+            )
+        ) {
+            is NovelContentService.Outcome.Ok -> {
+                chapters = chapters.map { if (it.index == index) it.copy(content = r.text) else it }
+                null
             }
-            NovelStore.updateChapterContent(context, n.id, index, clean)
-            chapters = chapters.map { if (it.index == index) it.copy(content = clean) else it }
-            return null
+            is NovelContentService.Outcome.PurifyEmpty -> {
+                // 原文只暂存本次会话，查看原文入口用，绝不写回缓存。
+                purifyFallbackText = r.raw
+                purifyFallbackIndex = index
+                ContentFail.PURIFY_EMPTY
+            }
+            is NovelContentService.Outcome.Failed -> r.reason
         }
-        return ContentFail.UNKNOWN
     }
 
     // v0.251.0：force 供刷新本章；onSuccess 供窗口加载在当前章成功后触发邻章预载。
@@ -472,6 +476,40 @@ fun ReaderScreen(
                 // v0.251.0：加载中窗口又变了时，成功后也按最新视口补预载，不依赖过期窗口。
                 if (chapterIndex != center) preloadWindow(chapterIndex)
             }
+        }
+    }
+
+    // v1.4.27 Step 4c：「查看原文」常驻——顶栏「更多 → 查看原文」任何一章都可看未净化原文。
+    // 净化后为空的章直接用本次会话暂存的原文；其他章用现有引擎接口 content() 现拉一次，
+    // 只进对话框内存显示，不写盘、不改缓存、不改正文（与 v0.251.0 临时查看原文同口径）。
+    var rawDialog by remember { mutableStateOf<ReaderRawState?>(null) }
+    var showTopMore by remember { mutableStateOf(false) }
+    fun openRawText() {
+        val idx = chapterIndex
+        val c = chapters.getOrNull(idx) ?: return
+        val fallback = purifyFallbackText
+        if (purifyFallbackIndex == idx && fallback != null) {
+            rawDialog = ReaderRawState(idx, c.title, fallback, null)
+            return
+        }
+        val n = novel
+        if (n == null || n.sourceKey == "local" || c.url.isBlank()) {
+            rawDialog = ReaderRawState(idx, c.title, null, "本地导入的书没有网页原文，正文就是导入时的文本。")
+            return
+        }
+        rawDialog = ReaderRawState(idx, c.title, null, null)
+        scope.launch {
+            val engine = runCatching { NovelSourceEngine.novelEngineForKey(context, n.sourceKey) }
+                .onFailure { if (it is CancellationException) throw it }
+                .getOrNull()
+            val r = engine?.let { e ->
+                runCatching { e.content(ChapterMeta(idx, c.title, c.url), true) }
+                    .onFailure { if (it is CancellationException) throw it }
+                    .getOrNull()
+            }
+            val next = rawStateOf(idx, c.title, r) { failText(it) }
+            // 用户已关掉或换了章再开的，不覆盖
+            if (rawDialog?.let { it.index == idx && it.raw == null && it.error == null } == true) rawDialog = next
         }
     }
 
@@ -1070,87 +1108,8 @@ fun ReaderScreen(
             .fillMaxSize()
             .background(bg),
     ) {
-        // 顶栏：返回 + 书名/章节名 + 进度（v0.61.0：沉浸模式时隐藏）
-        if (!immersive) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Filled.ArrowBack, "返回", tint = fg)
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        novel?.title ?: "",
-                        color = fg,
-                        fontSize = 14.sp,
-                        maxLines = 1,
-                    )
-                    Text(
-                        // v0.61.0：章节名后跟阅读进度百分比
-                        "${chapter?.title ?: ""}  $progressPct%",
-                        color = fg.copy(alpha = 0.75f), // v1.2.14 E片：章节名 0.6 浅底只有 3.81:1，改 0.75（5.94:1）
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                    )
-                    // v0.214.0：顶栏补来源名（报告中项：阅读页看不到当前来源）。
-                    if (readerSourceName.isNotBlank()) {
-                        Text(
-                            readerSourceName,
-                            color = fg.copy(alpha = 0.75f), // v1.2.14 E片：来源名 0.45 浅底只有约 2.6:1，改 0.75（5.94:1）
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                        )
-                    }
-                }
-                // v0.84.0：换源（本地 TXT 书没有源可换）
-                if (novel?.sourceKey != "local") {
-                    IconButton(onClick = { showChangeSource = true }) {
-                        Icon(Icons.Filled.SwapHoriz, "换源", tint = fg)
-                    }
-                }
-                // v0.211.0：书签只留一个入口——点图标开书签列表，列表里已有
-                // “＋ 添加当前进度”，顶栏不再同时摆“加书签图标 + 书签文字”。
-                IconButton(onClick = { showBookmarks = true }) {
-                    Icon(Icons.Filled.Bookmark, "书签", tint = fg)
-                }
-                // v0.215.0：章内搜索入口。
-                IconButton(onClick = { showChapterSearch = true }) {
-                    Icon(Icons.Filled.Search, "章内搜索", tint = fg)
-                }
-                // v0.242.0：刷新（图2顶栏 ↻）——重读本章，本地书无链接可拉的不摆。
-                if (novel?.sourceKey != "local") {
-                    IconButton(onClick = { refreshChapter() }) {
-                        Icon(Icons.Filled.Refresh, "刷新", tint = fg)
-                    }
-                }
-                // v1.1.10：结构化段评优先——本章已拉到结构化评论时，翻页模式顶栏
-                // 只摆文字入口（滚动模式走正文下方的分段入口），旧 WebView 图标不摆；
-                // 没拉到时仍按 v1.1.3 走评论链接入口，无链接不占地方。
-                if (pageMode != 0 && curParaTotal > 0) {
-                    Text(
-                        "本章段评（$curParaTotal）",
-                        color = fg,
-                        fontSize = 13.sp,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .clickable {
-                                paraSheetChapter = chapterIndex
-                                paraSheetPara = null
-                                showParaSheet = true
-                            }
-                            .padding(horizontal = 6.dp, vertical = 8.dp),
-                    )
-                } else if (curParaComments.isEmpty() && chapter?.commentUrl?.isNotBlank() == true) {
-                    IconButton(onClick = { showComment = true }) {
-                        Icon(Icons.Filled.Comment, "段评", tint = fg)
-                    }
-                }
-            }
-        }
-
+        // v1.4.27 Step 4c：顶栏挪出 Column，改为悬浮玻璃栏（见 Column 之后的 ReaderChromeFade），
+        // 不再占正文高度——点按切换显隐时正文不跳动、不重新分页。
         // v1.1.3：段评——半屏看站方评论页（只看，不解析不存）。
         if (showComment) {
             val url = chapter?.commentUrl.orEmpty()
@@ -1488,10 +1447,17 @@ fun ReaderScreen(
         // v0.242.0：沉浸页脚（对标图 1 底部）——沉浸时正文底下只留
         // 一行小字：章节名 + 页码/全书进度；点一下正文就出图 2 那套
         // chrome（顶栏 + 悬浮圆钮 + 底栏），再点收回。
-        if (immersive) {
+        // v1.4.27 Step 4c：页脚常驻占位（只随栏显隐淡入淡出，不增删）——正文高度在两态下一致。
+        val footerAlpha by animateFloatAsState(
+            if (immersive) 1f else 0f,
+            tween(readerChromeFadeMs(rememberReduceMotion())),
+            label = "footerAlpha",
+        )
+        run {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .graphicsLayer { alpha = footerAlpha }
                     .padding(horizontal = marginDp.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
@@ -1501,14 +1467,14 @@ fun ReaderScreen(
                 Text(
                     if (batteryPct >= 0) "$clockText  $batteryPct%" else clockText,
                     color = fg.copy(alpha = 0.75f), // v1.2.14 E片：页脚小字 0.6 浅底只有 3.81:1，改 0.75（5.94:1）
-                    fontSize = 12.sp,
+                    fontSize = ReaderChromeTokens.InfoSize, // v1.4.27 Step 4c：页码/章节信息 10sp（原 12sp）
                     maxLines = 1,
                     modifier = Modifier.padding(end = 12.dp),
                 )
                 Text(
                     chapter?.title ?: "",
                     color = fg.copy(alpha = 0.75f), // v1.2.14 E片：页脚小字 0.6 浅底只有 3.81:1，改 0.75（5.94:1）
-                    fontSize = 12.sp,
+                    fontSize = ReaderChromeTokens.InfoSize, // v1.4.27 Step 4c：页码/章节信息 10sp（原 12sp）
                     maxLines = 1,
                     modifier = Modifier.weight(1f),
                 )
@@ -1522,17 +1488,84 @@ fun ReaderScreen(
                         "${pagerState.currentPage + 1}/计算中  $progressPct%"
                     },
                     color = fg.copy(alpha = 0.75f), // v1.2.14 E片：页脚小字 0.6 浅底只有 3.81:1，改 0.75（5.94:1）
-                    fontSize = 12.sp,
+                    fontSize = ReaderChromeTokens.InfoSize, // v1.4.27 Step 4c：页码/章节信息 10sp（原 12sp）
                     maxLines = 1,
                 )
             }
         }
 
-        // 底栏：阅读式底菜单（v0.211.0 去重版，v0.242.0 对标图 2 改为
-        // 第一行 上一章 / 进度条 / 下一章，第二行 目录 / 界面 / 设置；
-        // 211 删掉的悬浮钮按图 2 加回来，改白色圆钮贴左下竖排）。
-        // 朗读按用户定不做，故不占位；亮度仍在设置面板里调。
-        if (!immersive) {
+    }
+
+    // v1.4.27 Step 4c：顶栏 / 底栏悬浮在正文之上（同一玻璃材质，跟阅读背景色），淡入淡出切换。
+    ReaderChromeFade(
+        visible = !immersive,
+        modifier = Modifier.align(Alignment.TopCenter).padding(top = ReaderChromeTokens.BarGap),
+    ) {
+        ReaderTopBar(
+            title = novel?.title ?: "",
+            info = listOf(
+                "${chapter?.title ?: ""}  $progressPct%",
+                readerSourceName,
+            ).filter { it.isNotBlank() }.joinToString(" · "),
+            bg = bg,
+            fg = fg,
+            onBack = onBack,
+        ) {
+            // 段评：结构化段评带数角标（总定稿）；没拉到结构化评论但有评论链接时走 WebView 入口。
+            if (curParaTotal > 0) {
+                ReaderBarIcon(
+                    Icons.AutoMirrored.Filled.Comment, "本章段评（$curParaTotal）", fg,
+                    onClick = {
+                        paraSheetChapter = chapterIndex
+                        paraSheetPara = null
+                        showParaSheet = true
+                    },
+                    badge = readerBadgeText(curParaTotal),
+                )
+            } else if (curParaComments.isEmpty() && chapter?.commentUrl?.isNotBlank() == true) {
+                ReaderBarIcon(Icons.AutoMirrored.Filled.Comment, "段评", fg, onClick = { showComment = true })
+            }
+            ReaderBarIcon(Icons.AutoMirrored.Filled.List, "目录", fg, onClick = { showToc = true })
+            Box {
+                ReaderBarIcon(Icons.Filled.MoreVert, "更多", fg, onClick = { showTopMore = true })
+                MaterialTheme(colorScheme = readerScheme) {
+                    GlassMenu(expanded = showTopMore, onDismissRequest = { showTopMore = false }) {
+                        // 原顶栏的 换源 / 书签 / 章内搜索 / 刷新 收进「更多」，功能与条件不变。
+                        if (novel?.sourceKey != "local") {
+                            GlassMenuItem(Icons.Filled.SwapHoriz, "换源", onClick = {
+                                showTopMore = false
+                                showChangeSource = true
+                            })
+                        }
+                        GlassMenuItem(Icons.Filled.Bookmark, "书签", onClick = {
+                            showTopMore = false
+                            showBookmarks = true
+                        })
+                        GlassMenuItem(Icons.Filled.Search, "章内搜索", onClick = {
+                            showTopMore = false
+                            showChapterSearch = true
+                        })
+                        if (novel?.sourceKey != "local") {
+                            GlassMenuItem(Icons.Filled.Refresh, "刷新本章", onClick = {
+                                showTopMore = false
+                                refreshChapter()
+                            })
+                        }
+                        // v1.4.27 Step 4c：「查看原文」常驻——任何一章都能看未净化原文（只读、不写盘）。
+                        GlassMenuItem(Icons.AutoMirrored.Filled.Article, "查看原文", onClick = {
+                            showTopMore = false
+                            openRawText()
+                        })
+                    }
+                }
+            }
+        }
+    }
+    ReaderChromeFade(
+        visible = !immersive,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = ReaderChromeTokens.BarGap),
+    ) {
+        ReaderBottomGlass(bg = bg, fg = fg) {
             ReaderBottomBar(
                 fg = fg,
                 chapterIndex = chapterIndex,
@@ -1563,6 +1596,16 @@ fun ReaderScreen(
                 },
             )
         }
+    }
+    rawDialog?.let { st ->
+        ReaderRawTextDialog(
+            chapterTitle = st.title,
+            raw = st.raw,
+            error = st.error,
+            bg = bg,
+            fg = fg,
+            onDismiss = { rawDialog = null },
+        )
     }
 
     // 界面面板（v0.242.0：图 2 底栏“界面”）——只放显示组（字号/
@@ -2222,22 +2265,17 @@ private fun ReaderBottomBar(
         // v0.240.0：底栏精细化——原来是两排裸文字按钮加一根深色粗滑杆，
         // 糊在正文底下没分隔，看着生硬；现加顶部细分隔线、滑杆改柔和
         // 轨道色、上下章加小箭头、设置补图标，底栏自成一块。
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(fg.copy(alpha = 0.08f)),
-        )
+        // v1.4.27 Step 4c：底栏改玻璃卡（ReaderBottomGlass 自带描边），顶部细分隔线去掉。
         // v0.294.5：章节位置小字（第 x / y 章 · 本章 %）
         if (chapterCount > 0) {
             Text(
                 "第 ${chapterIndex + 1} / $chapterCount 章 · 本章 ${(sliderValue * 100).toInt()}%",
                 color = fg.copy(alpha = 0.75f), // v1.2.14 E片：章节位置小字 0.55 浅底只有约 3.3:1，改 0.75（5.94:1）
-                fontSize = 11.sp,
+                fontSize = ReaderChromeTokens.InfoSize, // v1.4.27 Step 4c：章节信息 10sp（原 11sp）
                 maxLines = 1,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 6.dp),
+                    .padding(top = 4.dp),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
         }
@@ -2252,8 +2290,8 @@ private fun ReaderBottomBar(
                 enabled = chapterIndex > 0,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.ChevronLeft, "上一章", tint = fg, modifier = Modifier.size(18.dp))
-                    Text("上一章", color = fg)
+                    Icon(Icons.Filled.ChevronLeft, "上一章", tint = fg, modifier = Modifier.size(ReaderChromeTokens.Icon))
+                    Text("上一章", color = fg, fontSize = 12.sp)
                 }
             }
             Slider(
@@ -2303,8 +2341,8 @@ private fun ReaderBottomBar(
                 enabled = chapterIndex < chapterCount - 1,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("下一章", color = fg)
-                    Icon(Icons.Filled.ChevronRight, "下一章", tint = fg, modifier = Modifier.size(18.dp))
+                    Text("下一章", color = fg, fontSize = 12.sp)
+                    Icon(Icons.Filled.ChevronRight, "下一章", tint = fg, modifier = Modifier.size(ReaderChromeTokens.Icon))
                 }
             }
         }
@@ -2317,22 +2355,22 @@ private fun ReaderBottomBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ReaderBarAction(fg = fg, label = "目录", onClick = onShowToc) {
-                Icon(Icons.Filled.List, null, tint = fg, modifier = Modifier.size(22.dp))
+                Icon(Icons.AutoMirrored.Filled.List, null, tint = fg, modifier = Modifier.size(ReaderChromeTokens.Icon))
             }
             // v0.242.0：界面用 Aa 字样（与图 2 一致），开显示面板。
             ReaderBarAction(fg = fg, label = "界面", onClick = onOpenDisplaySettings) {
-                Text("Aa", color = fg, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text("Aa", color = fg, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
             ReaderBarAction(fg = fg, label = if (isNight) "日间" else "夜间", onClick = onToggleNight) {
                 Icon(
                     if (isNight) Icons.Filled.LightMode else Icons.Filled.DarkMode,
                     null,
                     tint = fg,
-                    modifier = Modifier.size(22.dp),
+                    modifier = Modifier.size(ReaderChromeTokens.Icon),
                 )
             }
             ReaderBarAction(fg = fg, label = "设置", onClick = onOpenSettings) {
-                Icon(Icons.Filled.Settings, null, tint = fg, modifier = Modifier.size(22.dp))
+                Icon(Icons.Filled.Settings, null, tint = fg, modifier = Modifier.size(ReaderChromeTokens.Icon))
             }
         }
     }
@@ -2349,12 +2387,13 @@ private fun ReaderBarAction(
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .novelClickable(kind = NovelMotion.Press.SMALL, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(modifier = Modifier.height(24.dp), contentAlignment = Alignment.Center) { icon() }
-        Text(label, color = fg.copy(alpha = 0.85f), fontSize = 11.sp, maxLines = 1)
+        // v1.4.27 Step 4c：图标 18dp（与顶栏统一）、小字 10sp
+        Box(modifier = Modifier.height(22.dp), contentAlignment = Alignment.Center) { icon() }
+        Text(label, color = fg.copy(alpha = 0.85f), fontSize = ReaderChromeTokens.ActionLabelSize, maxLines = 1)
     }
 }
 

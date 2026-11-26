@@ -38,7 +38,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.movieshell.data.novel.VerifyGate
-import org.json.JSONObject
 
 /**
  * v0.201.0：验证通道的界面端（挂在 MainActivity 根 Box 里，全局悬浮）。
@@ -125,16 +124,10 @@ fun VerifyGateDialog() {
                             view.evaluateJavascript(
                                 "(function(){return document.documentElement.outerHTML})()",
                             ) { raw ->
-                                val html = decodeJsResult(raw)
-                                // 原地址与落地地址的 Cookie 都带上（验证可能跨域），按名去重、落地地址优先
-                                val cookies = listOf(cur.url, pageUrl)
-                                    .flatMap { u ->
-                                        CookieManager.getInstance().getCookie(u).orEmpty().split(";")
-                                    }
-                                    .map { it.trim() }
-                                    .filter { it.isNotEmpty() }
-                                    .distinct()
-                                    .joinToString("; ")
+                                // v1.4.27 解缠⑨：解码与 Cookie 合并与后台通道共用 VerifyGate 的一份。
+                                val html = VerifyGate.decodeHtml(raw)
+                                // 原地址与落地地址的 Cookie 都带上（验证可能跨域），去重保序
+                                val cookies = VerifyGate.collectCookies(cur.url, pageUrl)
                                 VerifyGate.complete(VerifyGate.Result(html, pageUrl, cookies))
                             }
                         },
@@ -143,10 +136,4 @@ fun VerifyGateDialog() {
             }
         }
     }
-}
-
-/** evaluateJavascript 回调是 JSON 字符串字面量，包一层 {"v":...} 再取即得原文（嗅探屏同款）。 */
-private fun decodeJsResult(raw: String?): String {
-    if (raw.isNullOrBlank()) return ""
-    return runCatching { JSONObject("{\"v\":$raw}").getString("v") }.getOrDefault("")
 }

@@ -3,7 +3,13 @@ package com.movieshell.ui.novel
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,18 +20,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -49,6 +49,7 @@ import coil.compose.AsyncImage
 import com.movieshell.ui.components.TechDialog
 import com.movieshell.domain.model.BookSource
 import com.movieshell.data.novel.BookSourceManager
+import com.movieshell.data.novel.NovelExploreLoader
 import com.movieshell.domain.model.NovelSearchResult
 import com.movieshell.data.novel.NovelSourceEngine
 import kotlinx.coroutines.launch
@@ -86,7 +87,12 @@ fun ExploreScreen(
     // v0.246.0：加载代际——切分类时旧请求结果不许覆盖新分类
     var loadGen by remember(sourceKey) { mutableStateOf(0) }
     var notice by remember(sourceKey) { mutableStateOf<String?>(null) }
-    var webMode by remember(sourceKey) { mutableStateOf(true) }
+    // v1.4.27 P0.8：发现默认列表——有 ruleExploreList 的源默认进列表（解析成书目），
+    // 没有列表规则的源仍默认原网页直渲（列表解析不出东西）。顶部按钮仍可随时切换。
+    // key 带上“源是否已载入”：冷启动时书源表还没载入（source=null），载入后按规则重定一次默认。
+    var webMode by remember(sourceKey, source != null) {
+        mutableStateOf(ExploreDefaults.defaultWebMode(source))
+    }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pageUrl by remember(sourceKey) { mutableStateOf("") }
     var pageTitle by remember(sourceKey) { mutableStateOf("") }
@@ -98,7 +104,8 @@ fun ExploreScreen(
         selected?.let { NovelSourceEngine.explorePageUrl(src, it.url) }
     }.orEmpty()
 
-    fun load(src: BookSource, cat: NovelSourceEngine.ExploreCategory, p: Int, append: Boolean) {
+    // v1.4.27 解缠⑥：抓取走 NovelExploreLoader（按源/分类/页缓存）；force=“刷新”按钮现抓。
+    fun load(src: BookSource, cat: NovelSourceEngine.ExploreCategory, p: Int, append: Boolean, force: Boolean = false) {
         // v0.246.0：代际保护——原来 loading 时新请求直接 return，
         // 切分类后旧请求完成仍把旧分类结果写进 results（selected 已是新分类）。
         // 改每次 load 递增代际，写回时只认最新一代；旧请求结果直接丢弃。
@@ -106,7 +113,7 @@ fun ExploreScreen(
         loading = true
         notice = null
         scope.launch {
-            val list = runCatching { NovelSourceEngine.novelEngineFor(context, src).explore(cat.url, p, allowGate = true) }.getOrDefault(emptyList())
+            val list = NovelExploreLoader.load(context, src, cat.url, p, force)
             if (myGen != loadGen) return@launch
             results = if (append) (results + list).distinctBy { it.remoteId } else list
             if (list.isEmpty() && !append) notice = "这一页没有结果（可能撞上验证，稍后重试）"
@@ -121,6 +128,10 @@ fun ExploreScreen(
         if (selected == null) {
             selected = categories.firstOrNull { it.title == initialCategory } ?: first
             page = 1
+            // v1.4.27 P0.8：默认列表模式下首个分类自动加载（原来只有切到列表/点分类才抓）。
+            val src = source
+            val cat = selected
+            if (!webMode && src != null && cat != null && results.isEmpty()) load(src, cat, 1, false)
         }
     }
 
@@ -132,90 +143,120 @@ fun ExploreScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = {
-                if (webMode && webView?.canGoBack() == true) {
-                    webView?.goBack()
-                } else {
-                    onBack()
-                }
-            }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
-            }
-            Text(
-                "发现 · ${source?.name.orEmpty()}",
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = {
-                val toList = webMode
-                webMode = !webMode
-                if (toList) {
-                    val src = source ?: return@TextButton
-                    val cat = selected ?: return@TextButton
-                    page = 1
-                    if (results.isEmpty()) load(src, cat, 1, false)
-                }
-            }) { Text(if (webMode) "列表" else "原网页") }
+    // v1.4.27 Step 4b：发现页换 SlimGlassBar（返回＋标题「发现」）＋文字分类导航＋84dp 书卡＋瘦「加载更多」。
+    // 返回逻辑、列表/原网页切换、加载/代际保护、预览入架全部照旧，只换外观。
+    val goBack: () -> Unit = {
+        if (webMode && webView?.canGoBack() == true) webView?.goBack() else onBack()
+    }
+    fun toggleMode() {
+        val toList = webMode
+        webMode = !webMode
+        if (toList) {
+            val src = source ?: return
+            val cat = selected ?: return
+            page = 1
+            if (results.isEmpty()) load(src, cat, 1, false)
         }
+    }
+    fun reload() {
+        val src = source ?: return
+        val cat = selected ?: return
+        page = 1
+        load(src, cat, 1, false, force = true)
+    }
+    val p = novelPalette()
+    NovelBackground(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
+        Spacer(Modifier.height(8.dp))
+        SlimGlassBar(title = "发现", onBack = goBack) {
+            // 右侧：列表/原网页切换（原「列表/原网页」文字钮）＋刷新。设计稿写「筛选与搜索」，
+            // 发现页没有这两项功能，不摆空壳，用现有两项功能占位【自定】。
+            GlassIconButton(
+                if (webMode) Icons.AutoMirrored.Filled.ViewList else Icons.Outlined.Language,
+                if (webMode) "切到列表" else "切到原网页",
+                onClick = { toggleMode() },
+            )
+            Spacer(Modifier.width(NovelTokens.BarActionGap))
+            GlassIconButton(
+                Icons.Filled.Refresh, "刷新",
+                onClick = { if (webMode) webView?.reload() else reload() },
+            )
+        }
+        // 源名：顶栏只写「发现」，源名放导航上方一行 11sp 提示【自定】
+        Text(
+            source?.name.orEmpty() + if (webMode) " · 原网页" else "",
+            fontSize = 11.sp,
+            color = p.hint,
+            maxLines = 1,
+            modifier = Modifier.padding(start = NovelTokens.BarMarginH + 2.dp, top = 6.dp),
+        )
         when {
-            source == null -> Text("书源不存在或已删除。", modifier = Modifier.padding(top = 16.dp))
-            categories.isEmpty() -> Text("该源没有发现分类。", modifier = Modifier.padding(top = 16.dp))
+            source == null -> NovelEmptyState(
+                icon = Icons.Outlined.Explore, text = "书源不存在或已删除",
+                modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                actionText = "返回", onAction = onBack,
+            )
+            categories.isEmpty() -> NovelEmptyState(
+                icon = Icons.Outlined.Explore, text = "该源没有发现分类",
+                modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                actionText = "返回", onAction = onBack,
+            )
             else -> {
-                LazyRow {
-                    items(categories, key = { it.title }) { cat ->
-                        val isSel = selected?.title == cat.title
-                        FilterChip(
-                            selected = isSel,
-                            onClick = {
-                                val src = source ?: return@FilterChip
-                                selected = cat
-                                page = 1
-                                if (!webMode) load(src, cat, 1, false)
-                            },
-                            label = { Text(cat.title) },
-                            modifier = Modifier.padding(end = 6.dp),
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                val group = source?.let { SourceGroup(it.key, it.name, results) }
+                DiscoverCategoryNav(
+                    titles = categories.map { it.title },
+                    selected = selected?.title,
+                    onSelect = { title ->
+                        val src = source
+                        val cat = categories.firstOrNull { it.title == title }
+                        if (cat != null) {
+                            selected = cat
+                            page = 1
+                            if (!webMode) load(src, cat, 1, false)
+                        }
+                    },
+                )
+                Spacer(Modifier.height(6.dp))
+                val group = source.let { SourceGroup(it.key, it.name, results) }
                 if (webMode) {
-                    if (webLoading) {
-                        Text("加载中…", fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            pageTitle,
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            modifier = Modifier.weight(1f),
-                        )
+                    Row(
+                        Modifier.padding(horizontal = NovelTokens.BarMarginH),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (webLoading) {
+                            NovelLoading(Modifier.weight(1f))
+                        } else {
+                            Text(
+                                pageTitle,
+                                fontSize = 11.sp,
+                                color = p.hint,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                         Spacer(Modifier.width(8.dp))
                         val canJoin = pageUrl.isNotBlank() &&
                             pageUrl.trimEnd('/') != categoryUrl.trimEnd('/')
-                        val isJoining = group != null && (group.key + pageUrl) in joining
-                        Button(
-                            enabled = canJoin && !isJoining,
-                            onClick = {
-                                val g = group ?: return@Button
-                                searchVm.joinShelf(
-                                    g,
-                                    NovelSearchResult(
-                                        sourceKey = g.key,
-                                        remoteId = pageUrl,
-                                        title = cleanPageTitle(pageTitle),
-                                        author = null,
-                                        cover = null,
-                                    ),
-                                )
-                            },
-                        ) { Text(if (isJoining) "加入中…" else "加入书架") }
+                        val isJoining = (group.key + pageUrl) in joining
+                        if (canJoin || isJoining) {
+                            NovelPillButton(
+                                text = if (isJoining) "加入中…" else "加入书架",
+                                primary = true,
+                                onClick = {
+                                    if (!isJoining) searchVm.joinShelf(
+                                        group,
+                                        NovelSearchResult(
+                                            sourceKey = group.key,
+                                            remoteId = pageUrl,
+                                            title = cleanPageTitle(pageTitle),
+                                            author = null,
+                                            cover = null,
+                                        ),
+                                    )
+                                },
+                            )
+                        }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
                     key(categoryUrl) {
                         AndroidView(
                             modifier = Modifier.weight(1f),
@@ -224,7 +265,7 @@ fun ExploreScreen(
                                     settings.javaScriptEnabled = true
                                     settings.domStorageEnabled = true
                                     CookieManager.getInstance().setAcceptCookie(true)
-                                    source?.headerUa?.ifBlank { null }?.let { settings.userAgentString = it }
+                                    source.headerUa.ifBlank { null }?.let { settings.userAgentString = it }
                                     webViewClient = object : WebViewClient() {
                                         override fun onPageFinished(view: WebView, url: String) {
                                             pageUrl = url
@@ -242,67 +283,58 @@ fun ExploreScreen(
                             },
                         )
                     }
+                } else if (results.isEmpty() && loading) {
+                    Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
+                        NovelLoading()
+                    }
+                } else if (results.isEmpty()) {
+                    NovelEmptyState(
+                        icon = Icons.Outlined.Explore,
+                        text = notice ?: "这一页没有结果",
+                        modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                        actionText = "重试",
+                        onAction = { reload() },
+                    )
                 } else {
-                    LazyColumn(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = NovelTokens.BarMarginH, end = NovelTokens.BarMarginH, bottom = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(DiscoverTokens.CardGap),
+                    ) {
                         items(results, key = { it.remoteId }) { item ->
-                            val isJoining = group != null && (group.key + item.remoteId) in joining
-                            Column(
-                                Modifier.fillMaxWidth()
-                                    .clickable(enabled = !isJoining) {
-                                        previewItem = item
-                                    }
-                                    .padding(vertical = 10.dp),
-                            ) {
-                                Text(item.title, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (!item.author.isNullOrBlank()) {
-                                        Text(
-                                            item.author,
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                    }
-                                    if (isJoining) {
-                                        Text("加入中…", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                                    }
-                                }
-                            }
+                            val isJoining = (group.key + item.remoteId) in joining
+                            DiscoverBookCard(
+                                item = item,
+                                lines = discoverCardLines(item, selected?.title, source.name),
+                                joining = isJoining,
+                                onClick = { previewItem = item },
+                            )
                         }
                         if (notice != null) {
-                            item { Text(notice.orEmpty(), fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp)) }
-                        }
-                        if (results.isNotEmpty()) {
                             item {
-                                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                                    if (loading) {
-                                        Text("加载中…", fontSize = 13.sp)
-                                    } else {
-                                        Button(onClick = {
-                                            val src = source ?: return@Button
-                                            val cat = selected ?: return@Button
-                                            val next = page + 1
-                                            page = next
-                                            load(src, cat, next, true)
-                                        }) { Text("加载更多") }
-                                        Spacer(Modifier.width(8.dp))
-                                        TextButton(onClick = {
-                                            val src = source ?: return@TextButton
-                                            val cat = selected ?: return@TextButton
-                                            page = 1
-                                            load(src, cat, 1, false)
-                                        }) { Text("刷新") }
-                                    }
-                                }
+                                Text(notice.orEmpty(), fontSize = 11.sp, color = p.hint, modifier = Modifier.padding(vertical = 8.dp))
                             }
-                        } else if (loading) {
-                            item { Text("加载中…", fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp)) }
+                        }
+                        item {
+                            SlimLoadMore(
+                                loading = loading,
+                                onLoadMore = {
+                                    val src = source
+                                    val cat = selected
+                                    if (cat != null) {
+                                        val next = page + 1
+                                        page = next
+                                        load(src, cat, next, true)
+                                    }
+                                },
+                                onRefresh = { reload() },
+                            )
                         }
                     }
                 }
             }
         }
+    }
     }
 
     // v0.215.0：列表行详情预览弹窗（确认才入架；取消不丢列表）。

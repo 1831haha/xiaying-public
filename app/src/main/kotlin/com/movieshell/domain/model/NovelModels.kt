@@ -100,6 +100,22 @@ sealed interface ContentResult {
     data class Failed(val reason: ContentFail) : ContentResult
 }
 
+/**
+ * v1.4.27：书源搜索测试结果五档（引擎 NovelSourceEngine.testSearch 产出，书源管理页弹窗共用）。
+ * - [Ok]：搜到 count（>0）条，通过；
+ * - [Zero]：请求与解析都正常完成但 0 条，未验证（可能关键词不对）；
+ * - [Failed]：执行失败（地址算不出 / 死站跳过期内 / 页没抓到 / 规则抛异常）；
+ * - [Timeout]：超过 timeoutMs 墙钟（底层 Call 已 cancel，不写失败名单、不记死站）；
+ * - [NotConfigured]：searchUrl 或 ruleSearchList 任一为空（与 search() 的 `||` 同口径），不发请求。
+ */
+sealed interface TestSearchResult {
+    data class Ok(val count: Int) : TestSearchResult
+    data object Zero : TestSearchResult
+    data object Failed : TestSearchResult
+    data object Timeout : TestSearchResult
+    data object NotConfigured : TestSearchResult
+}
+
 /** v0.229.0：搜书详情页用——详情页规则一次求全（书名/作者/简介/封面/类型）。 */
 data class BookDetailInfo(
     val name: String = "",

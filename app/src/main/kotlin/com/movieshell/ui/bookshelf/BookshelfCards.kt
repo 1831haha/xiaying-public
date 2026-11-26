@@ -1,6 +1,11 @@
 package com.movieshell.ui.bookshelf
 
 import com.movieshell.ui.theme.V5
+import com.movieshell.ui.novel.NovelEmptyState
+import com.movieshell.ui.novel.NovelMotion
+import com.movieshell.ui.novel.NovelTokens
+import com.movieshell.ui.novel.novelClickable
+import com.movieshell.ui.novel.novelPalette
 
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.UploadFile
@@ -104,20 +109,32 @@ fun Novel.readFraction(): Float {
     return if (!hasStartedReading) 0f else (read + 1).toFloat() / total
 }
 
-/** v0.197.0：阅读式列表行——不用玻璃卡片，plain 行 + 底部分隔线；四行信息
- * （书名+未读数角标 / 作者 / 已读章节 / 最新章节或上次阅读），进度条去掉，
- * 与阅读书架行结构对齐。网格卡片不动（书架布局切换时仍用）。
- * v0.248.0：按参考图改行式——封面放大到 68x92、书名放宽到两行、行尾加总章数
- * 浅蓝胶囊，总章数只由胶囊承担、不再在正文重复；数据口径与回调一律不动，
- * 网格卡片仍不动。 */
-@OptIn(ExperimentalFoundationApi::class)
+/** v1.4.27 Step 4：书架行卡尺寸（f5bb9b44 书架列表逐项照做）。 */
+object ShelfRowTokens {
+    val Height = 76.dp
+    val CoverW = 46.dp
+    val CoverH = 60.dp
+    val TitleSize = 13.sp
+    val AuthorSize = 10.sp
+    val ProgressSize = 10.sp
+    val ProgressBar = 3.dp
+    val Corner = 10.dp
+    val Gap = 6.dp
+}
+
+/**
+ * v1.4.27 Step 4：书架行卡 ShelfCompactRow（f5bb9b44 §发现页与书架）——76dp、封面 46×60dp、
+ * 书名 13sp、作者 10sp、进度 10sp、进度条 3dp、圆角 10dp、行间距 6dp（列表处 spacedBy）。
+ * 信息与改版前一致（书名＋更新数角标 / 作者 / 已读章节＋总章数或目录状态 / 进度条），只换版式；
+ * 下拉刷新逐本状态（转圈 / 失败）留在行尾。不做大统计卡片。
+ * 原 v0.197.0～v0.248.0 的四行 plain 行（64×96 封面、15sp）整体换掉，函数名保留（调用点不动）。
+ */
 @Composable
 fun NovelListCard(
     novel: Novel,
     lastReadAt: Long,
     updateCount: Int = 0,
-    // v0.211.0：下拉刷新逐本状态——checking 转圈、checkFailed 红色“失败”，
-    // 转圈优先于失败（正在查的书不先贴失败）。
+    // v0.211.0：下拉刷新逐本状态——checking 转圈、checkFailed 红色“失败”，转圈优先于失败。
     checking: Boolean = false,
     checkFailed: Boolean = false,
     selectionMode: Boolean = false,
@@ -126,149 +143,118 @@ fun NovelListCard(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val total = novel.totalChapters.coerceAtLeast(1)
-    val read = novel.lastReadChapter.coerceIn(0, total - 1)
-
-    Column(modifier = modifier.fillMaxWidth()) {
-        Row(
+    val p = novelPalette()
+    val shape = RoundedCornerShape(ShelfRowTokens.Corner)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(ShelfRowTokens.Height)
+            .clip(shape)
+            // 行底：玻璃填充 × 45%（与书源行同口径【自定】）
+            .background(p.glass.copy(alpha = p.glass.alpha * 0.45f))
+            .border(1.dp, p.glassStroke.copy(alpha = p.glassStroke.alpha * 0.6f), shape)
+            .novelClickable(kind = NovelMotion.Press.CARD, onLongClick = onLongClick, onClick = onClick)
+            // 行内边距【自定 9dp，与发现书卡左右内边距同档】
+            .padding(horizontal = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (selectionMode) {
+            Checkbox(checked = selected, onCheckedChange = { onClick() }, modifier = Modifier.size(36.dp))
+        }
+        Box(
             modifier = Modifier
-                .bookPressable(onClick = onClick, onLongClick = onLongClick)
-                .padding(vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .size(width = ShelfRowTokens.CoverW, height = ShelfRowTokens.CoverH)
+                // 封面圆角【自定 6dp，与发现书卡封面同档】
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center,
         ) {
-            if (selectionMode) {
-                Checkbox(
-                    checked = selected,
-                    onCheckedChange = { onClick() },
-                    modifier = Modifier.padding(end = 4.dp),
+            if (!novel.cover.isNullOrBlank()) {
+                AsyncImage(
+                    model = novel.cover,
+                    contentDescription = novel.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
                 )
-            }
-            Box(
-                modifier = Modifier
-                    // v0.294.6：封面改 2:3（64x96）+ 10dp 圆角，底色走 surfaceContainerHigh
-                    .size(width = 64.dp, height = 96.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (!novel.cover.isNullOrBlank()) {
-                    AsyncImage(
-                        model = novel.cover,
-                        contentDescription = novel.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
-                    Text(
-                        text = novel.title.firstOrNull()?.toString() ?: "书",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f), // v1.2.14 E片：占位首字 0.5 只有 2.50:1，改 0.8（5.14:1）
-                    )
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        novel.title,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        // v0.109.0 A9：书名在玻璃卡片上，亮色主题白底青字难读，用明度自适应青色
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // 阅读式未读角标：只显示数字（蓝底小 pill），不再是“+N 章”
-                    if (updateCount > 0) {
-                        Spacer(Modifier.width(6.dp))
-                        // v0.215.0：角标样式统一——数字 pill，不再呼吸脉冲（多本更新时满屏闪）。
-                        Text(
-                            text = "$updateCount",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier
-                                .background(
-                                    MaterialTheme.colorScheme.primary,
-                                    RoundedCornerShape(10.dp),
-                                )
-                                .padding(horizontal = 8.dp, vertical = 2.dp),
-                        )
-                    }
-                }
-                Spacer(Modifier.height(3.dp))
-                NovelMetaRow(
-                    icon = Icons.Filled.Person,
-                    text = novel.author?.takeIf { it.isNotBlank() } ?: "未知作者",
-                )
-                Spacer(Modifier.height(2.dp))
-                NovelMetaRow(
-                    icon = Icons.Filled.MenuBook,
-                    // v0.214.0：书架行补在读章节标题（有标题才拼，无标题回落只显章号）。
-                    text = if (!novel.hasStartedReading) "还没读过"
-                    else "已读：第 ${read + 1} 章" + (novel.lastReadChapterTitle?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
-                )
-                Spacer(Modifier.height(2.dp))
-                NovelMetaRow(
-                    icon = Icons.Filled.LibraryBooks,
-                    // v0.248.0：总章数改由行尾胶囊承担，本行只留最新章节或上次阅读，
-                    // 不再重复写共 N 章（GPT 第 1 批复核：去重）。
-                    // v0.249.0：目录未到时不显示假的最新章节——LOADING/FAILED 各有状态文案。
-                    text = when (novel.dirState) {
-                        NovelStore.DIR_LOADING -> "正在获取目录…"
-                        NovelStore.DIR_FAILED -> "目录获取失败，点击重试"
-                        else -> novel.latestChapterTitle?.takeIf { it.isNotBlank() }?.let { "最新：$it" }
-                            ?: formatLastReadTs(lastReadAt)
-                    },
-                )
-            }
-            // v0.248.0：行尾总章数胶囊（参考图右侧“80话”位）——浅蓝底自适应青字，
-            // 深色主题下用低透明度蓝底，不照搬亮底；只展示，不可点。
-            // v0.249.0：目录未到时胶囊不显示假的章数——LOADING 显示状态，FAILED 红底。
-            Spacer(Modifier.width(8.dp))
-            val isDirFailed = novel.dirState == NovelStore.DIR_FAILED
-            Text(
-                text = when (novel.dirState) {
-                    NovelStore.DIR_LOADING -> "目录加载中"
-                    NovelStore.DIR_FAILED -> "目录获取失败"
-                    else -> "${total}章"
-                },
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (isDirFailed) Color.White else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .background(
-                        if (isDirFailed) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                        RoundedCornerShape(10.dp),
-                    )
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-            )
-            // v0.211.0：行尾逐本状态——转圈 = 这本还在查，停了就是查完了；
-            // 失败贴红色“失败”，有更新的数字角标本来就在书名旁。
-            if (checking) {
-                Spacer(Modifier.width(8.dp))
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    strokeWidth = 2.dp,
-                )
-            } else if (checkFailed) {
-                Spacer(Modifier.width(8.dp))
+            } else {
                 Text(
-                    text = "失败",
-                    fontSize = 11.sp,
+                    text = novel.title.firstOrNull()?.toString() ?: "书",
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    modifier = Modifier
-                        .background(MaterialTheme.colorScheme.error, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 )
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    novel.title,
+                    fontSize = ShelfRowTokens.TitleSize,
+                    fontWeight = FontWeight.SemiBold,
+                    color = p.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (updateCount > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    // 更新数角标：10sp 白字主强调绿底【自定】
+                    Text(
+                        text = "$updateCount",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier
+                            .background(p.accent, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                novel.author?.takeIf { it.isNotBlank() } ?: "未知作者",
+                fontSize = ShelfRowTokens.AuthorSize, color = p.hint, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            val isDirFailed = novel.dirState == NovelStore.DIR_FAILED
+            Text(
+                text = when (novel.dirState) {
+                    // v0.249.0：目录未到时不显示假的章数/最新章节
+                    NovelStore.DIR_LOADING -> "正在获取目录…"
+                    NovelStore.DIR_FAILED -> "目录获取失败，点击重试"
+                    else -> shelfProgressLine(novel, lastReadAt)
+                },
+                fontSize = ShelfRowTokens.ProgressSize,
+                color = if (isDirFailed) p.error else p.body,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(5.dp))
+            // 进度条 3dp：轨道描边色、填充主强调绿【自定】
+            Box(
+                Modifier.fillMaxWidth().height(ShelfRowTokens.ProgressBar).clip(RoundedCornerShape(2.dp)).background(p.glassStroke),
+            ) {
+                Box(
+                    Modifier.fillMaxWidth(novel.readFraction()).fillMaxHeight().clip(RoundedCornerShape(2.dp)).background(p.accent),
+                )
+            }
+        }
+        if (checking) {
+            Spacer(Modifier.width(8.dp))
+            CircularProgressIndicator(modifier = Modifier.size(NovelTokens.Spinner), color = p.accent, strokeWidth = 2.dp)
+        } else if (checkFailed) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "失败",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier
+                    .background(p.error, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 6.dp, vertical = 1.dp),
+            )
+        }
     }
 }
 
@@ -434,59 +420,40 @@ fun NovelGridCard(
     }
 }
 
-/** v0.98.0：趣味空状态。
- * v0.294.6：紧凑化——不再顶 120dp 空白，图标井缩小，一句短提示 + 找书/导入两个按钮。 */
+/** v0.98.0：趣味空状态。v1.4.27 Step 4：换统一空态组件（图标＋文案＋“去找书 / 导入 TXT”两个引导按钮）。 */
 @Composable
 fun BookshelfEmptyState(
     onFindBook: () -> Unit,
     onImportTxt: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 72.dp, bottom = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(V5.CornerLg)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Book,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(26.dp),
-            )
-        }
-        Spacer(Modifier.height(14.dp))
-        Text(
-            "书架还是空的",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "搜本小说，或导入本地 TXT",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AppButton(
-                text = "去找书",
-                onClick = onFindBook,
-                icon = Icons.Filled.Search,
-            )
-            AppButton(
-                text = "导入 TXT",
-                onClick = onImportTxt,
-                variant = AppButtonVariant.Secondary,
-                icon = Icons.Outlined.UploadFile,
-            )
-        }
-    }
+    NovelEmptyState(
+        icon = Icons.Outlined.Book,
+        text = "书架还是空的",
+        hint = "搜本小说，或导入本地 TXT",
+        modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+        actionText = "去找书",
+        onAction = onFindBook,
+        secondaryText = "导入 TXT",
+        onSecondary = onImportTxt,
+    )
+}
+
+/**
+ * v1.4.27 Step4 审稿 A7：书架行卡第三行（目录终态 READY 时）。
+ * - 未读：有最新章 →「还没读过 · 最新：X」；没有 → 只显示「还没读过」（原来会拼成「还没读过 · 还没读过」）。
+ * - 已读：「已读 N/总 章」＋在读章节标题（接回旧行「已读：第 N 章 · <在读章节标题>」的信息）
+ *   ＋「最新：X」；没有最新章时补上次阅读时间（有时间才补）。单行，超长尾部省略。
+ */
+internal fun shelfProgressLine(novel: Novel, lastReadAt: Long): String {
+    val latest = novel.latestChapterTitle?.takeIf { it.isNotBlank() }?.let { "最新：$it" }
+    if (!novel.hasStartedReading) return listOfNotNull("还没读过", latest).joinToString(" · ")
+    val total = novel.totalChapters.coerceAtLeast(1)
+    val read = novel.lastReadChapter.coerceIn(0, total - 1)
+    return listOfNotNull(
+        "已读 ${read + 1}/$total 章",
+        novel.lastReadChapterTitle?.takeIf { it.isNotBlank() },
+        latest ?: lastReadAt.takeIf { it > 0 }?.let { formatLastReadTs(it) },
+    ).joinToString(" · ")
 }
 
 /** 上次阅读时间格式化（从原 BookshelfScreen 搬运）。 */

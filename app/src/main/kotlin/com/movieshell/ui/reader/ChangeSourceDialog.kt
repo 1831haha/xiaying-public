@@ -45,15 +45,15 @@ import androidx.compose.ui.unit.dp
 import com.movieshell.domain.model.Chapter
 import com.movieshell.domain.model.Novel
 import com.movieshell.data.novel.BookSourceManager
+import com.movieshell.data.novel.NovelSearchPipeline
 import com.movieshell.data.novel.NovelSourceEngine
+import com.movieshell.data.novel.NovelTocService
 import com.movieshell.domain.model.NovelSearchResult
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.store.NovelStore
 import com.movieshell.ui.components.AppCard
 import com.movieshell.ui.components.StatusRing
 import com.movieshell.ui.components.StatusRingState
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -105,28 +105,11 @@ fun ChangeSourceDialog(
             val currentFirst = { list: List<ChangeSourceGroup> ->
                 list.sortedByDescending { it.key == novel.sourceKey }
             }
-            coroutineScope {
-                val flowJob = launch {
-                    NovelSourceEngine.searchAllFlow(enabledSources, kw).collect { res ->
-                        if (res.books.isNotEmpty()) {
-                            groups = currentFirst(groups + ChangeSourceGroup(res.source.key, res.source.name, res.books))
-                        }
-                    }
+            // v1.4.27 解缠④：与找书页共用搜书管线（不开精准过滤，与改版前一致）。
+            NovelSearchPipeline.groups(context, enabledSources, enabledPy, kw).collect { hit ->
+                if (hit.books.isNotEmpty()) {
+                    groups = currentFirst(groups + ChangeSourceGroup(hit.key, hit.name, hit.books))
                 }
-                val pyJob = async {
-                    NovelSourceEngine.searchAllPy(context, enabledPy, kw)
-                        .filter { it.second.isNotEmpty() }
-                        .map { (r, books) ->
-                            ChangeSourceGroup(
-                                PyBookSourceManager.SOURCE_KEY_PREFIX + r.name,
-                                "${r.title}（本地PY）",
-                                books,
-                            )
-                        }
-                }
-                val pyGroups = pyJob.await()
-                if (pyGroups.isNotEmpty()) groups = currentFirst(groups + pyGroups)
-                flowJob.join()
             }
             searching = false
         }
@@ -139,7 +122,8 @@ fun ChangeSourceDialog(
             val ok = runCatching {
                 val engine = NovelSourceEngine.novelEngineForKey(context, group.key)
                     ?: return@runCatching -1
-                val metas = engine.chapters(item)
+                // v1.4.27 解缠⑤：目录抓取统一走目录服务（换源要现抓，不读缓存）。
+                val metas = NovelTocService.fetchChapters(engine, group.key, item)
                 if (metas.isEmpty()) return@runCatching -1
                 val chapters = metas.map {
                     Chapter(novelId = novel.id, index = it.index, title = it.title, url = it.url, commentUrl = it.commentUrl)

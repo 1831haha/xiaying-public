@@ -21,6 +21,12 @@ data class BookSource(
     val ruleSearchAuthor: String = "",
     val ruleSearchCover: String = "",
     val ruleSearchBookUrl: String = "",
+    /**
+     * v1.4.27：搜索测试关键词（阅读式 ruleSearch.checkKeyWord）。原样保存用户/源文件写的值，
+     * 空串＝没配；测试时缺失/空/空白回退 [DEFAULT_CHECK_KEYWORD]（见 [effectiveCheckKeyWord]），
+     * 默认词不写进源文件（toJson 只在非空白时写回）。
+     */
+    val checkKeyWord: String = "",
     val ruleBookName: String = "",
     val ruleBookAuthor: String = "",
     val ruleBookIntro: String = "",
@@ -80,6 +86,10 @@ data class BookSource(
     val headerMap: Map<String, String>
         get() = parseHeaderMap(header)
 
+    /** v1.4.27：搜索测试实际用的关键词——checkKeyWord 去首尾空白，空则回退默认「斗罗」。 */
+    val effectiveCheckKeyWord: String
+        get() = checkKeyWord.trim().ifBlank { DEFAULT_CHECK_KEYWORD }
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("bookSourceName", name)
         put("bookSourceUrl", url)
@@ -92,6 +102,10 @@ data class BookSource(
             put("author", ruleSearchAuthor)
             put("coverUrl", ruleSearchCover)
             put("bookUrl", ruleSearchBookUrl)
+            // v1.4.27：测试关键词有值才写（默认词不落盘，老源导出与之前逐字一致）
+            if (checkKeyWord.isNotBlank()) {
+                put("checkKeyWord", checkKeyWord)
+            }
         })
         put("ruleBookInfo", JSONObject().apply {
             put("name", ruleBookName)
@@ -147,6 +161,9 @@ data class BookSource(
     }
 
     companion object {
+        /** v1.4.27：搜索测试默认关键词（checkKeyWord 缺失/空/空白时用；只在运行时用，不写进源文件）。 */
+        const val DEFAULT_CHECK_KEYWORD = "斗罗"
+
         /** header 可能是对象或 JSON 字符串（阅读导出是字符串），两种都认，只取 User-Agent。 */
         private fun parseHeaderUa(o: JSONObject): String {
             o.optJSONObject("header")?.let { return it.optString("User-Agent").orEmpty() }
@@ -185,6 +202,9 @@ data class BookSource(
                 ruleSearchAuthor = rs?.optString("author").orEmpty(),
                 ruleSearchCover = rs?.optString("coverUrl").orEmpty(),
                 ruleSearchBookUrl = rs?.optString("bookUrl").orEmpty(),
+                // v1.4.27：JSON null 显式判掉（Android 的 org.json optString 对 null 值回 "null" 字串）；纯空白归一成空串
+                checkKeyWord = rs?.takeUnless { it.isNull("checkKeyWord") }
+                    ?.optString("checkKeyWord").orEmpty().ifBlank { "" },
                 ruleBookName = rb?.optString("name").orEmpty(),
                 ruleBookAuthor = rb?.optString("author").orEmpty(),
                 ruleBookIntro = rb?.optString("intro").orEmpty(),

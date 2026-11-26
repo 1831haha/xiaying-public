@@ -17,8 +17,13 @@ import com.movieshell.domain.model.ParagraphComment
  */
 interface NovelEngine {
 
-    /** 在单个书源里搜书。 */
-    suspend fun search(keyword: String, allowGate: Boolean = false): List<NovelSearchResult>
+    /**
+     * 在单个书源里搜书。
+     * v1.4.27 解缠④：补 [page]（默认 1，老调用方零改动）——找书页“单源加载更多”
+     * 改走引擎接口，不再直调 NovelSourceEngine.search(pageNum)。不支持分页的引擎
+     *（PY）在 page>1 时回空列表，调用方据此判“已到底”。
+     */
+    suspend fun search(keyword: String, allowGate: Boolean = false, page: Int = 1): List<NovelSearchResult>
 
     /** 拉目录。book.remoteId 为空时返回空列表。 */
     suspend fun chapters(book: NovelSearchResult): List<ChapterMeta>

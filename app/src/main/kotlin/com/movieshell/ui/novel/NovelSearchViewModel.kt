@@ -8,13 +8,12 @@ import androidx.lifecycle.viewModelScope
 import com.movieshell.domain.model.Novel
 import com.movieshell.data.novel.BookSourceManager
 import com.movieshell.domain.model.NovelSearchResult
+import com.movieshell.data.novel.NovelSearchPipeline
 import com.movieshell.data.novel.NovelSourceEngine
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.novel.NovelDirectoryFill
 import com.movieshell.data.store.NovelStore
 import com.movieshell.data.store.SearchHistoryStore
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
@@ -167,7 +166,9 @@ class NovelSearchViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _loadingMore.value = _loadingMore.value + groupKey
             try {
-                val books = NovelSourceEngine.search(source, kw, allowGate = false, pageNum = page)
+                // v1.4.27 解缠④：走引擎接口（NovelEngine.search 补了 page），不再直调引擎实现。
+                val books = NovelSourceEngine.novelEngineFor(getApplication(), source)
+                    .search(kw, allowGate = false, page = page)
                 val (kept, dropped) = NovelSourceEngine.applyPrecisionFilter(
                     books, kw, _precisionSearch.value,
                 )
@@ -295,15 +296,9 @@ class NovelSearchViewModel(app: Application) : AndroidViewModel(app) {
                 _searched.value = true
                 // v0.66.0：锁定单 PY 源 → 只搜它
                 if (locked != null) {
-                    _results.value = NovelSourceEngine.searchAllPy(getApplication(), listOf(locked), kw)
-                        .filter { it.second.isNotEmpty() }
-                        .map { (r, books) ->
-                            SourceGroup(
-                                PyBookSourceManager.SOURCE_KEY_PREFIX + r.name,
-                                "${r.title}（本地PY）",
-                                books,
-                            )
-                        }
+                    // v1.4.27 解缠④：PY 分组走搜书管线（组 key/组名同一份）。
+                    _results.value = NovelSearchPipeline.searchPyGroups(getApplication(), listOf(locked), kw)
+                        .map { SourceGroup(it.key, it.name, it.books) }
                 } else {
                     val enabledSources = BookSourceManager.sources.value.filter { it.enabled }
                     val enabledPyRules = PyBookSourceManager.rules.value
@@ -331,33 +326,19 @@ class NovelSearchViewModel(app: Application) : AndroidViewModel(app) {
                         pending.clear()
                         lastFlushMs = System.currentTimeMillis()
                     }
-                    coroutineScope {
-                        val flowJob = launch {
-                            NovelSourceEngine.searchAllFlow(
-                                enabledSources, kw, precision = _precisionSearch.value,
-                            ).collect { res ->
-                                _filteredCount.value += res.filtered
-                                if (res.books.isNotEmpty()) {
-                                    pending.add(SourceGroup(res.source.key, res.source.name, res.books))
-                                    if (System.currentTimeMillis() - lastFlushMs >= 400) flushPending()
-                                }
-                            }
-                            flushPending()
+                    // v1.4.27 解缠④：JSON 流式 + PY 一次性的合流收到 NovelSearchPipeline，
+                    // 这里只管节流刷新。PY 组到达即刷（与改版前 append(pyJob.await()) 同效）。
+                    NovelSearchPipeline.groups(
+                        getApplication(), enabledSources, enabledPyRules, kw,
+                        precision = _precisionSearch.value,
+                    ).collect { hit ->
+                        _filteredCount.value += hit.filtered
+                        if (hit.books.isNotEmpty()) {
+                            pending.add(SourceGroup(hit.key, hit.name, hit.books))
+                            if (hit.isPy || System.currentTimeMillis() - lastFlushMs >= 400) flushPending()
                         }
-                        val pyJob = async {
-                            NovelSourceEngine.searchAllPy(getApplication(), enabledPyRules, kw)
-                                .filter { it.second.isNotEmpty() }
-                                .map { (r, books) ->
-                                    SourceGroup(
-                                        PyBookSourceManager.SOURCE_KEY_PREFIX + r.name,
-                                        "${r.title}（本地PY）",
-                                        books,
-                                    )
-                                }
-                        }
-                        append(pyJob.await())
-                        flowJob.join()
                     }
+                    flushPending()
                 }
             // v1.1.12：搜完读一遍失败汇总——有失败才置标，无失败保持 null。
             _failedLabel.value = NovelSourceEngine.failedSearchLabel()

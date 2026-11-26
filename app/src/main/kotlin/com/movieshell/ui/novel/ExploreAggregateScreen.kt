@@ -47,6 +47,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.movieshell.domain.model.BookSource
 import com.movieshell.data.novel.BookSourceManager
+import com.movieshell.data.novel.NovelExploreLoader
 import com.movieshell.domain.model.NovelSearchResult
 import com.movieshell.data.novel.NovelSourceEngine
 import com.movieshell.ui.components.TechTextField
@@ -90,15 +91,14 @@ fun ExploreAggregateScreen(
     var loadingCats by remember { mutableStateOf<Set<Pair<String, String>>>(emptySet()) }
     var failedCats by remember { mutableStateOf<Set<Pair<String, String>>>(emptySet()) }
 
-    fun load(src: BookSource, cat: NovelSourceEngine.ExploreCategory) {
+    // v1.4.27 解缠⑥：抓取走 NovelExploreLoader（与单源发现页共用缓存）；force=“重试”现抓。
+    fun load(src: BookSource, cat: NovelSourceEngine.ExploreCategory, force: Boolean = false) {
         val key = src.key to cat.url
         if (loadingCats.contains(key)) return
         loadingCats = loadingCats + key
         failedCats = failedCats - key
         scope.launch {
-            val list = runCatching {
-                NovelSourceEngine.novelEngineFor(context, src).explore(cat.url, 1, allowGate = true)
-            }.getOrDefault(emptyList())
+            val list = NovelExploreLoader.load(context, src, cat.url, 1, force)
             resultsByCat = resultsByCat + (key to list)
             if (list.isEmpty()) failedCats = failedCats + key
             loadingCats = loadingCats - key
@@ -209,7 +209,7 @@ fun ExploreAggregateScreen(
                                             modifier = Modifier.weight(1f),
                                         )
                                         TextButton(onClick = {
-                                            selCat?.let { load(src, it) }
+                                            selCat?.let { load(src, it, force = true) }
                                         }) { Text("重试") }
                                     }
                                     Spacer(Modifier.height(12.dp))

@@ -1310,10 +1310,12 @@ object LegadoJsEngine {
      * v1.2.24：`{$.path}` 内嵌替换（阅读 AnalyzeByJSonPath.innerRule("{$.") 同款）。
      * 规则里一处字段的值嵌进另一处路径/JS，如 `$.data[?(@.pid=='{$.id}')]`
      * 或 `$.id@js:'https://x.com/b/'+'{$.name}'`；取不到时嵌空串。
+     * 返回值附带“任一内嵌字段是否取空”（字面量模板分支按旧语义回 "" 用）。
      */
-    private fun interpolateJsonPaths(rule: String, item: Any?, ctx: JsCtx, state: JsState): String {
-        if (!rule.contains("{$.", ignoreCase = false)) return rule
+    private fun interpolateJsonPaths(rule: String, item: Any?, ctx: JsCtx, state: JsState): Pair<String, Boolean> {
+        if (!rule.contains("{$.", ignoreCase = false)) return rule to false
         val sb = StringBuilder()
+        var anyEmpty = false
         var idx = 0
         while (true) {
             val start = rule.indexOf("{$.", idx)
@@ -1326,11 +1328,17 @@ object LegadoJsEngine {
                 sb.append(rule.substring(idx))
                 break
             }
-            sb.append(rule.substring(idx, start))
-            sb.append(jsonPathString(item, rule.substring(start + 1, end).trim()))
-            idx = end + 1
+            // v1.4.26：双花括号 {{$.x}} 与单花括号 {$.x} 是同一处内嵌（阅读式模板写法，
+            // 如 bookUrl 里的 &book_id={{$.book_id}}），两侧花括号成对消耗，不留残括号。
+            val double = start > idx && rule[start - 1] == '{' &&
+                end + 1 < rule.length && rule[end + 1] == '}'
+            sb.append(rule.substring(idx, if (double) start - 1 else start))
+            val v = jsonPathString(item, rule.substring(start + 1, end).trim())
+            if (v.isEmpty()) anyEmpty = true
+            sb.append(v)
+            idx = if (double) end + 2 else end + 1
         }
-        return sb.toString()
+        return sb.toString() to anyEmpty
     }
 
     /**
@@ -1348,7 +1356,7 @@ object LegadoJsEngine {
         if (r0.isBlank()) return emptyList()
         val root = parseJson(json)
         for (alt in splitTopLevelOr(r0)) {
-            val items = evalJsonListRuleSingle(json, interpolateJsonPaths(alt, root, ctx, state), ctx, state)
+            val items = evalJsonListRuleSingle(json, interpolateJsonPaths(alt, root, ctx, state).first, ctx, state)
             if (items.isNotEmpty()) return items
         }
         return emptyList()
@@ -1387,8 +1395,13 @@ object LegadoJsEngine {
      *   `$.id@js:'https://www.heiyan.com/book/'+result`）；- `##正则` 或
      *   `##正则##替换`：取值后按正则替换（如 `$.authorname##<.*?>` 去标签）；
      * - `<js>` 前缀：整段 JS，result=该条目 JSON 文本。
+     * - 裸键（如 `book_name`）：按条目同名键取值（阅读同款语义）；
+     * - 字面量模板（如 bookUrl 里的 `https://…&book_id={{$.book_id}}`）：
+     *   内嵌字段替换完后整串就是最终取值。
      * 非 `$.` 开头的纯 CSS 规则在 JSON 条目上无意义，返回空串。
      * v1.2.24：`||` 备选（第一个取到值的分支胜出）+ `{$.x}` 内嵌。
+     * v1.4.26：内嵌求值移到 evalJsonFieldSingle 内做（字面量模板分支要知道
+     * 原规则里有没有发生过内嵌替换），裸键与字面量模板见该函数。
      */
     fun evalJsonField(
         item: Any?,
@@ -1399,11 +1412,22 @@ object LegadoJsEngine {
         val r0 = substituteTemplates(rule.trim(), ctx)
         if (r0.isBlank()) return ""
         for (alt in splitTopLevelOr(r0)) {
-            val v = evalJsonFieldSingle(item, interpolateJsonPaths(alt, item, ctx, state), ctx, state)
+            val v = evalJsonFieldSingle(item, alt, ctx, state)
             if (v.isNotEmpty()) return v
         }
         return ""
     }
+
+    /** v1.4.26：裸键只认纯标识符（字母/数字/下划线，字母或下划线开头）——
+     * 含空格/点/斜杠/`@` 的串（如 `a@href`、`div.book`）不是键，不当键取。 */
+    private val bareJsonKeyRegex = Regex("^[A-Za-z_][A-Za-z0-9_]*$")
+
+    /** v1.4.26 修：整条规则就是一个 {$.x} / {{$.x}} 占位。 */
+    private val singleJsonPlaceholderRegex = Regex("^\\{\\$\\.[^}{]+\\}$|^\\{\\{\\$\\.[^}{]+\\}\\}$")
+
+    /** v1.4.26 修：插值后的字面量模板是不是 URL 形（绝对 http(s) 或 / 开头相对地址）。 */
+    private fun isUrlLikeTemplate(core: String) =
+        core.startsWith("http://") || core.startsWith("https://") || core.startsWith("/")
 
     private fun evalJsonFieldSingle(
         item: Any?,
@@ -1411,8 +1435,12 @@ object LegadoJsEngine {
         ctx: JsCtx,
         state: JsState,
     ): String {
-        val r = rule.trim()
-        if (r.isBlank()) return ""
+        val raw = rule.trim()
+        if (raw.isBlank()) return ""
+        // `{$.x}` / `{{$.x}}` 内嵌先替换（@js: 段里的 `{$.name}` 同样在这里展开，
+        // 与之前在调用方替换的顺序一致：先内嵌，再拆 <js>/##/@js:）。
+        val (r, anyEmpty) = interpolateJsonPaths(raw, item, ctx, state)
+        val interpolated = r != raw
         val (js, rest) = splitJsPrefix(r)
         if (js != null) {
             val itemJson = when (item) {
@@ -1439,6 +1467,15 @@ object LegadoJsEngine {
             val out = evalJs(code, ctx, state, result = value, src = value)
             value = toJsString(out)
         } else if (core.trimStart().startsWith("$.")) {
+            value = jsonPathString(item, core.trim())
+        } else if (interpolated && !anyEmpty && !core.contains("{$.") && !core.contains("<js>")
+            && (singleJsonPlaceholderRegex.matches(raw.substringBefore("##").trim()) || isUrlLikeTemplate(core.trim()))) {
+            // v1.4.26 修（智能体 + GPT 推前审稿）：字面量模板只认两种形——## 之前那段就是一个
+            // {{$.x}} 占位，或插值后是 http(s)/相对地址的 URL 模板；任一内嵌字段取空时按旧语义
+            // 回 ""（丢弃该条目，不返回带空参数的残 URL）；div.{{$.x}} 这类 CSS 形规则不进本分支。
+            value = core
+        } else if (bareJsonKeyRegex.matches(core.trim())) {
+            // v1.4.26：裸键按条目同名键取值。
             value = jsonPathString(item, core.trim())
         } else {
             return ""

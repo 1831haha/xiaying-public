@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Folder
@@ -59,6 +60,7 @@ import com.movieshell.data.store.ReadingProgressStore
 import com.movieshell.domain.model.Chapter
 import com.movieshell.domain.model.Novel
 import com.movieshell.data.novel.BookSourceManager
+import com.movieshell.data.novel.NovelBookCache
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.store.BookGroup
 import com.movieshell.data.store.NovelStore
@@ -269,6 +271,35 @@ fun BookDetailDialog(
                     actionText = if (onOpenToc != null) "查看目录" else if (showToc) "收起目录" else "查看目录",
                     onAction = { onOpenToc?.invoke() ?: run { showToc = !showToc } },
                 )
+                // v1.4.27 P0.1：整本缓存（最小接入：一行状态＋开始/继续/取消；视觉 Step 4 再做）。
+                if (novel.sourceKey != "local" && novel.dirState == NovelStore.DIR_READY) {
+                    val cacheMap by NovelBookCache.progress.collectAsState()
+                    val live = cacheMap[novel.id]
+                    var stored by remember(novel.id) { mutableStateOf<Pair<Int, Int>?>(null) }
+                    LaunchedEffect(novel.id, live?.running) {
+                        stored = runCatching { NovelBookCache.cachedCount(context, novel.id) }.getOrNull()
+                    }
+                    val running = live?.running == true
+                    val (done, total) = if (live != null) live.done to live.total else stored ?: (0 to 0)
+                    InfoRow(
+                        icon = Icons.Filled.Download,
+                        label = "缓存",
+                        value = buildString {
+                            append(if (total > 0) "已缓存 $done/$total 章" else "—")
+                            if (running) append("（缓存中）")
+                            else live?.stopReason?.let { append("（").append(it).append("）") }
+                        },
+                        actionText = when {
+                            running -> "取消"
+                            total > 0 && done >= total -> null
+                            done > 0 -> "继续缓存"
+                            else -> "缓存全本"
+                        },
+                        onAction = {
+                            if (running) NovelBookCache.cancel(novel.id) else NovelBookCache.start(context, novel.id)
+                        },
+                    )
+                }
                 if (onToggleFavorite != null) {
                     InfoRow(
                         icon = if (isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,

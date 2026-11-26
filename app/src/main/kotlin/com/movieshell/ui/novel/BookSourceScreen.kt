@@ -1,9 +1,6 @@
 package com.movieshell.ui.novel
 
 import com.movieshell.data.store.NovelStore
-import com.movieshell.ui.components.AppSearchBar
-import com.movieshell.ui.components.AppCard
-import com.movieshell.ui.components.AppSwitch
 import com.movieshell.ui.components.AppToast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
@@ -33,6 +30,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.AutoFixHigh
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.SearchOff
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -47,11 +55,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import com.movieshell.ui.components.TechDialog
@@ -67,6 +73,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -78,18 +85,17 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.movieshell.core.js.LegadoJsEngine
 import com.movieshell.data.novel.BookProbe
-import com.movieshell.data.novel.BookProbeRecord
 import com.movieshell.data.novel.BookProbeStore
+import com.movieshell.data.novel.toSourceHealth
+import com.movieshell.domain.model.shortLabel
 import com.movieshell.domain.model.BookSource
 import com.movieshell.data.novel.BookSourceManager
+import com.movieshell.data.novel.NovelSourceTrash
 import com.movieshell.data.novel.PurifyRuleStore
-import com.movieshell.data.novel.PyBookApi
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.source.CmsApi
 import com.movieshell.ui.components.TechTextField
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -140,17 +146,15 @@ fun BookSourceScreen(
     LaunchedEffect(deleteTarget) {
         deleteAffectedCount = deleteTarget?.let {
             withContext(Dispatchers.IO) {
-                NovelStore.countBySourceKey(context, it.key)
+                // v1.4.27 解缠⑧：在架 sourceKey 统一从行模型取（SourceRow.shelfKey）。
+                NovelStore.countBySourceKey(context, SourceRow.Json(it).shelfKey)
             }
         }
     }
     LaunchedEffect(deletePyTarget) {
         deletePyAffectedCount = deletePyTarget?.let {
             withContext(Dispatchers.IO) {
-                NovelStore.countBySourceKey(
-                    context,
-                    "${PyBookSourceManager.SOURCE_KEY_PREFIX}${it.name}",
-                )
+                NovelStore.countBySourceKey(context, SourceRow.Py(it).shelfKey)
             }
         }
     }
@@ -173,34 +177,54 @@ fun BookSourceScreen(
         batchAffectedCount = if (!batchDeleteConfirm) null
         else withContext(Dispatchers.IO) {
             selectedSrcKeys.sumOf { k ->
-                val key = when {
-                    k.startsWith("py_") -> PyBookSourceManager.SOURCE_KEY_PREFIX + k.removePrefix("py_")
-                    k.startsWith("json_") -> k.removePrefix("json_")
-                    else -> k
-                }
-                NovelStore.countBySourceKey(context, key)
+                NovelStore.countBySourceKey(context, SourceRow.shelfKeyOf(k))
             }
         }
     }
-    val shownPy = remember(pyRules, srcQuery) {
-        if (srcQuery.isBlank()) pyRules else pyRules.filter {
-            it.name.contains(srcQuery, ignoreCase = true) || it.title.contains(srcQuery, ignoreCase = true)
+    // v1.4.27 解缠⑧：过滤与选择 key 统一走行模型 SourceRow（口径逐字不变，界面不动）。
+    val shownRows = remember(pyRules, sources, srcQuery) {
+        SourceRow.rows(pyRules, sources).filter { it.matches(srcQuery) }
+    }
+    val shownPy = remember(shownRows) { shownRows.filterIsInstance<SourceRow.Py>().map { it.rule } }
+    val shownJson = remember(shownRows) { shownRows.filterIsInstance<SourceRow.Json>().map { it.source } }
+    val allShownKeys = remember(shownRows) { shownRows.map { it.selectKey } }
+    // v1.4.27 P0.2：JSON 书源按分组分段（SourceGroups.group），折叠集合只在本页内存里。
+    val jsonGroups = remember(shownJson) { SourceGroups.group(shownJson) }
+    var collapsedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // 源多（>100）时首次进页默认全部折叠，2000+ 条不用一路滑到底；之后以用户点选为准。
+    var collapseInit by remember { mutableStateOf(false) }
+    LaunchedEffect(sources.size) {
+        if (!collapseInit && sources.isNotEmpty()) {
+            collapseInit = true
+            if (sources.size > SourceGroups.AUTO_COLLAPSE_OVER) {
+                collapsedGroups = SourceGroups.group(sources).map { it.first }.toSet()
+            }
         }
     }
-    val shownJson = remember(sources, srcQuery) {
-        if (srcQuery.isBlank()) sources else sources.filter {
-            it.name.contains(srcQuery, ignoreCase = true) || it.url.contains(srcQuery, ignoreCase = true)
-        }
+    // 批量“全选/反选”只作用于看得见的行——折叠组里的源不被一并勾上误删。
+    val visibleSelectKeys = remember(shownRows, jsonGroups, collapsedGroups, srcQuery) {
+        val hidden = if (jsonGroups.size > 1 && srcQuery.isBlank()) {
+            jsonGroups.filter { it.first in collapsedGroups }
+                .flatMap { g -> g.second.map { SourceRow.Json(it).selectKey } }.toSet()
+        } else emptySet()
+        allShownKeys.filter { it !in hidden }
     }
-    val allShownKeys = remember(shownPy, shownJson) {
-        shownPy.map { "py_${it.name}" } + shownJson.map { "json_${it.key}" }
+    // v0.67.0：PY 源连通性测试；v0.217.0（F42）一次只测一个、按点击顺序排队。
+    // v1.4.27 搜索测试：PY 与 JSON 共用 SourceTestRunner（共用一把锁、按行 key 记排队/执行态、
+    // 复位一律 finally、删源时取消该行任务），结果改结构化 TestResultDisplay。
+    val testRunner = remember(scope) { SourceTestRunner(scope) }
+    // 搜索测试关键词输入弹窗的目标源（null=不弹）与输入值
+    var testInputFor by remember { mutableStateOf<BookSource?>(null) }
+    var testKeyword by remember { mutableStateOf("") }
+    // v1.4.27 P0.7：书源回收站（软删除＋恢复）。条目随书源表 / PY 规则变化（删、恢复）重读。
+    var showTrash by remember { mutableStateOf(false) }
+    var trashClearConfirm by remember { mutableStateOf(false) }
+    var trashPurgeTarget by remember { mutableStateOf<NovelSourceTrash.Entry?>(null) }
+    var trashEntries by remember { mutableStateOf<List<NovelSourceTrash.Entry>>(emptyList()) }
+    var trashTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(sources, pyRules, trashTick) {
+        trashEntries = withContext(Dispatchers.IO) { NovelSourceTrash.of(context).list() }
     }
-    // v0.67.0：PY 源连通性测试
-    var testingPy by remember { mutableStateOf<String?>(null) }
-    // v0.217.0（F42）：验证排队锁——原来多源测试并发跑、共用 testingPy／
-    // testResult，先跑完的把后跑的转圈清掉、结果互相顶掉；一次只测一个，
-    // 点多个源时按点击顺序排队出结果。
-    val testMutex = remember { Mutex() }
     // v0.96.1：净化规则生效数（按钮上展示）
     var purifyCount by remember { mutableIntStateOf(-1) }
     LaunchedEffect(Unit) {
@@ -208,7 +232,6 @@ fun BookSourceScreen(
             PurifyRuleStore.list(context).count { it.enable }
         }.getOrDefault(-1)
     }
-    var testResult by remember { mutableStateOf<String?>(null) }
     // v0.76.0：导进来的是影视 spider——弹窗提示，可一键转去影视源导入
     // v0.294.5：rememberSaveable——转屏/进程重建后“导入为影视源”确认不丢
     var videoSpiderUri by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<android.net.Uri?>(null) }
@@ -231,7 +254,7 @@ fun BookSourceScreen(
             val rec = probeMap[src.key]
             if (rec != null && rec.url == src.url && now - rec.time < 24L * 60 * 60 * 1000) return@forEach
             launch {
-                val r = BookProbe.probe(src.url)
+                val r = BookProbe.probeSource(src)
                 BookProbeStore.update(context, src.key, r)
             }
         }
@@ -360,133 +383,132 @@ fun BookSourceScreen(
         )
     }
 
-    // v1.3.33：整页贴边（U-P1-11），标题行保留 16dp。
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 16.dp)) {
-        if (!embedded) {
-        // v0.86.0：第一行只留返回+标题，清爽
-        // v0.227.0：四个导入入口并成一个——标题行末尾一个“导入书源”
-        // 钮，点开弹窗再选方式；原来四个均分大钮占的一行省掉。
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = accent)
-            }
-            Text(
-                "书源管理",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
-            )
-            FilledTonalButton(
-                onClick = { showImportMenu = true },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-            ) {
-                Icon(Icons.Filled.Add, null, modifier = Modifier.size(14.dp))
-                Spacer(Modifier.width(2.dp))
-                Text("导入书源", fontSize = 12.sp, maxLines = 1)
-            }
+    // v1.4.27 Step 4：整页按 f5bb9b44「书源管理」——SlimGlassBar（返回＋标题＋搜索/添加/更多）、
+    // 顶栏到统计区 12dp、统计区 48dp、搜索框 38dp（点搜索图标展开）、搜索框到列表 10dp、
+    // 书源行 44dp/间隔 3dp/左右 16dp。发现聚合、净化规则、恢复默认、批量、回收站收进「更多」浮层菜单。
+    val palette = novelPalette()
+    var showSearch by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val stats = remember(pyRules, pyEnabled, sources, probeMap) { SourceStats.of(pyRules, pyEnabled, sources, probeMap) }
+    val restoreBuiltinAction: () -> Unit = {
+        scope.launch {
+            // v0.186.0：restoreBuiltin 返回 false 有两种含义——已存在、写盘失败；
+            // 调用前已有内置源才是已存在，否则就是写盘失败（失败时内存已回滚）。
+            val hadBuiltin = BookSourceManager.sources.value.any { it.key == "www.quanben.io" }
+            val added = BookSourceManager.restoreBuiltin(context)
+            AppToast.show(context, when {
+                    added -> "已恢复内置书源（全本小说网）"
+                    hadBuiltin -> "内置书源已存在，无需恢复"
+                    else -> "保存失败，内置书源未恢复，请重试"
+                }, long = false)
         }
-        Spacer(Modifier.height(6.dp))
-        }
-        // v0.223.0：头部压缩——说明只留一行（开关语义），发现聚合/净化规则/
-        // 恢复默认由三个通栏大钮并成一行小钮，省约 110dp。
-        Text(
-            "开关控制搜索时是否使用该源",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            // v0.214.0：发现聚合入口（多源首屏横滑行，不用逐源钻进去）。
-            FilledTonalButton(
-                onClick = onOpenExploreAggregate,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp),
-            ) {
-                Icon(Icons.Filled.Explore, null, modifier = Modifier.size(14.dp))
-                Spacer(Modifier.width(2.dp))
-                Text("发现聚合", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            // v0.95.0：净化规则入口（正文替换规则管理）；v0.96.1：按钮上显示生效数
-            FilledTonalButton(
-                onClick = onOpenPurifyRules,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp),
-            ) {
-                Icon(Icons.Filled.AutoFixHigh, null, modifier = Modifier.size(14.dp))
-                Spacer(Modifier.width(2.dp))
-                Text(
-                    "净化规则" + if (purifyCount >= 0) " · $purifyCount" else "",
-                    fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+    }
+    @Composable
+    fun MoreMenuButton() {
+        Box {
+            GlassIconButton(Icons.Outlined.MoreVert, "更多管理", { showMoreMenu = true })
+            GlassMenu(expanded = showMoreMenu, onDismissRequest = { showMoreMenu = false }) {
+                GlassMenuItem(Icons.Outlined.Checklist, if (batchMode) "退出批量" else "批量管理", {
+                    showMoreMenu = false
+                    batchMode = !batchMode
+                    if (!batchMode) selectedSrcKeys = emptySet()
+                })
+                GlassMenuItem(Icons.Outlined.Explore, "发现聚合", { showMoreMenu = false; onOpenExploreAggregate() })
+                GlassMenuItem(
+                    Icons.Outlined.AutoFixHigh, "净化规则",
+                    { showMoreMenu = false; onOpenPurifyRules() },
+                    trailing = if (purifyCount >= 0) "$purifyCount" else null,
+                )
+                GlassMenuItem(Icons.Outlined.Refresh, "恢复默认", { showMoreMenu = false; restoreBuiltinAction() })
+                GlassMenuItem(
+                    Icons.Outlined.Delete, "回收站",
+                    { showMoreMenu = false; showTrash = true },
+                    trailing = if (trashEntries.isNotEmpty()) "${trashEntries.size}" else null,
                 )
             }
-            // v0.107.0 P0-7：删光书源后手动恢复内置源（已存在则提示，无需操作）
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        // v0.186.0：restoreBuiltin 返回 false 有两种含义——已存在、写盘失败；
-                        // 调用前已有内置源才是已存在，否则就是写盘失败（失败时内存已回滚）。
-                        // 内置源 key 与 BookSourceManager 的内置 key 一致：quanben 网址去协议去尾斜杠。
-                        val hadBuiltin = BookSourceManager.sources.value.any { it.key == "www.quanben.io" }
-                        val added = BookSourceManager.restoreBuiltin(context)
-                        AppToast.show(context, when {
-                                added -> "已恢复内置书源（全本小说网）"
-                                hadBuiltin -> "内置书源已存在，无需恢复"
-                                else -> "保存失败，内置书源未恢复，请重试"
-                            }, long = false)
-                    }
-                },
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp),
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+    if (!embedded) NovelBackground(Modifier.fillMaxSize())
+    Column(modifier = Modifier.fillMaxSize().padding(vertical = if (embedded) 8.dp else 16.dp)) {
+        if (!embedded) {
+            SlimGlassBar(title = "书源管理", onBack = onBack) {
+                GlassIconButton(Icons.Outlined.Search, "搜索书源", {
+                    showSearch = !showSearch
+                    if (!showSearch) srcQuery = ""
+                })
+                GlassIconButton(Icons.Outlined.Add, "导入书源", { showImportMenu = true })
+                MoreMenuButton()
+            }
+            Spacer(Modifier.height(NovelTokens.BarBelowGap))
+        } else {
+            // 嵌入书架子页：外层已有顶栏，这里只留一行“搜索框＋添加＋更多”【自定】
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = NovelTokens.RowMarginH),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NovelTokens.BarActionGap),
             ) {
-                Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(14.dp))
-                Spacer(Modifier.width(2.dp))
-                Text("恢复默认", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                NovelSearchField(srcQuery, { srcQuery = it }, "搜索书源", Modifier.weight(1f))
+                GlassIconButton(Icons.Outlined.Add, "导入书源", { showImportMenu = true })
+                MoreMenuButton()
+            }
+            Spacer(Modifier.height(NovelTokens.SearchToList))
+        }
+        SourceStatsStrip(stats, Modifier.padding(horizontal = NovelTokens.RowMarginH))
+        if (!embedded) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showSearch || srcQuery.isNotEmpty(),
+                enter = androidx.compose.animation.fadeIn(tween(NovelMotion.pageFadeMs(rememberReduceMotion()))) +
+                    androidx.compose.animation.expandVertically(tween(NovelMotion.pageFadeMs(rememberReduceMotion()))),
+                exit = androidx.compose.animation.fadeOut(tween(NovelMotion.pageFadeMs(rememberReduceMotion()))) +
+                    androidx.compose.animation.shrinkVertically(tween(NovelMotion.pageFadeMs(rememberReduceMotion()))),
+            ) {
+                // 统计区到搜索框【自定 8dp】
+                NovelSearchField(
+                    srcQuery, { srcQuery = it }, "搜索书源（名称 / 地址）",
+                    Modifier.fillMaxWidth().padding(start = NovelTokens.RowMarginH, end = NovelTokens.RowMarginH, top = 8.dp),
+                    focusModifier = Modifier.focusRequester(searchFocus),
+                )
+                LaunchedEffect(Unit) { runCatching { searchFocus.requestFocus() } }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        // v0.197.0：阅读式顶部搜索（按名/地址过滤）+ 批量入口
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // v0.294.6：统一 AppSearchBar
-            AppSearchBar(
-                value = srcQuery,
-                onValueChange = { srcQuery = it },
-                placeholder = "搜索书源",
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(8.dp))
-            TextButton(onClick = {
-                batchMode = !batchMode
-                if (!batchMode) selectedSrcKeys = emptySet()
-            }) {
-                Text(if (batchMode) "取消批量" else "批量")
-            }
-        }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(NovelTokens.SearchToList))
         LazyColumn(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(NovelTokens.RowGap),
+            contentPadding = PaddingValues(horizontal = NovelTokens.RowMarginH),
         ) {
             // v0.64.0：本地 PY 书源区
             if (shownPy.isNotEmpty()) {
                 item(key = "py_header") {
-                    Text(
-                        "本地 PY 书源（${pyRules.count { it.name in pyEnabled }} 已启用）",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = accent,
-                    )
+                    SourceSectionTitle("本地 PY 书源 · ${pyRules.count { it.name in pyEnabled }} 已启用")
                 }
             }
             items(shownPy, key = { "py_${it.name}" }) { r ->
-                // v1.2.26：单行窄行（与 JSON 卡同口径；文件名与大小进长按后的文本编辑页看）。
-                AppCard(
-                    modifier = Modifier.fillMaxWidth(),
+                val row = SourceRow.Py(r)
+                SourceCompactRow(
+                    name = r.title,
+                    statusText = "PY",
+                    statusColor = palette.hint,
+                    dotColor = palette.unconfigured,
+                    enabled = r.name in pyEnabled,
+                    onEnabledChange = {
+                        scope.launch {
+                            // v1.3.33 B-P2-7：写盘改 IO 线程（suspend），失败提示；管理器已回滚内存表。
+                            if (!PyBookSourceManager.setEnabled(context, r.name, it)) {
+                                AppToast.show(context, "保存失败", long = false)
+                            }
+                        }
+                    },
+                    testPhase = testRunner.phaseOf(row.selectKey),
+                    onTest = {
+                        // v0.67.0：连通性测试（跑一遍 bookSearch）；v1.4.27 走共用排队器，PY 不弹输入框。
+                        testRunner.result = null
+                        testRunner.submit(row.selectKey) { SourceRowActions.testPy(context, row) }
+                    },
+                    onEdit = { editPyTarget = r },
+                    onDelete = { deletePyTarget = r },
                     onClick = { onOpenPySource(r.name) },
                     onLongClick = {
                         scope.launch {
@@ -499,236 +521,108 @@ fun BookSourceScreen(
                             }
                         }
                     },
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (batchMode) {
-                            Checkbox(
-                                checked = "py_${r.name}" in selectedSrcKeys,
-                                onCheckedChange = {
-                                    selectedSrcKeys = if (it) selectedSrcKeys + "py_${r.name}"
-                                    else selectedSrcKeys - "py_${r.name}"
-                                },
-                                modifier = Modifier.padding(end = 4.dp),
-                            )
-                        }
-                        Text(
-                            r.title, fontWeight = FontWeight.Bold, fontSize = 15.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        AppSwitch(
-                            checked = r.name in pyEnabled,
-                            onCheckedChange = {
-                                scope.launch {
-                                    // v1.3.33 B-P2-7：写盘改 IO 线程（suspend），失败提示；
-                                    // 管理器已回滚内存表，开关随 StateFlow 旧值自动弹回，
-                                    // 不用手动复位（同款见下行 JSON 书源）。
-                                    if (!PyBookSourceManager.setEnabled(context, r.name, it)) {
-                                        AppToast.show(context, "保存失败", long = false)
-                                    }
-                                }
-                            },
-                        )
-                        // v0.67.0：连通性测试（跑一遍 bookSearch）
-                        if (testingPy == r.name) {
-                            Box(
-                                modifier = Modifier.size(32.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                            }
-                        } else {
-                            Box(
-                                modifier = Modifier.size(32.dp).clickable {
-                                    testingPy = r.name
-                                    testResult = null
-                                    scope.launch {
-                                        // 排队：等前一个源的测试跑完再跑自己的，
-                                        // 转圈与结果不再被别的源顶掉。
-                                        testMutex.withLock {
-                                            val path = PyBookSourceManager.rulePath(context, r.name)
-                                            val msg = if (path == null) {
-                                                "找不到源文件"
-                                            } else {
-                                                PyBookApi().testSearch(path).fold(
-                                                    onSuccess = { n -> "测试通过：搜到 $n 本书" },
-                                                    onFailure = { e -> "测试失败：${e.message}" },
-                                                )
-                                            }
-                                            testResult = "《${r.title}》$msg"
-                                        }
-                                        testingPy = null
-                                    }
-                                },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Filled.PlayArrow,
-                                    "测试",
-                                    tint = accent,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        }
-                        Box(
-                            modifier = Modifier.size(32.dp).clickable { editPyTarget = r },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Filled.Edit, "编辑", tint = accent, modifier = Modifier.size(20.dp))
-                        }
-                        Box(
-                            modifier = Modifier.size(32.dp).clickable { deletePyTarget = r },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Filled.Delete,
-                                "删除",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                }
+                    batchMode = batchMode,
+                    selected = row.selectKey in selectedSrcKeys,
+                    onSelect = { selectedSrcKeys = SourceRow.toggled(selectedSrcKeys, row.selectKey, it) },
+                    modifier = Modifier.animateItem(),
+                )
             }
             if (shownJson.isNotEmpty()) {
-                item(key = "json_header") {
-                    Text(
-                        "JSON 书源",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = accent,
-                    )
-                }
+                item(key = "json_header") { SourceSectionTitle("JSON 书源") }
             }
-            items(shownJson, key = { "json_${it.key}" }) { s ->
-                // v1.2.26：单行窄行——名＋状态＋开关＋编辑/删除一行放下（约 44dp，原两行约 80dp）；
-                // 地址与分组进点卡后的字段编辑页看，「发现」入口保留（有发现分类的源才显示）。
-                // 点卡进字段编辑，长按进文本编辑（与原来点行/长按一致）。
-                AppCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = { editTarget = s },
-                    onLongClick = { textEditJson = s },
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (batchMode) {
-                            Checkbox(
-                                checked = "json_${s.key}" in selectedSrcKeys,
-                                onCheckedChange = {
-                                    selectedSrcKeys = if (it) selectedSrcKeys + "json_${s.key}"
-                                    else selectedSrcKeys - "json_${s.key}"
-                                },
-                                modifier = Modifier.padding(end = 4.dp),
-                            )
-                        }
-                        // v1.1.3：连通状态点＋耗时（发现页探测结果；没去过发现页即“未测”）。
-                        val rec = probeMap[s.key]
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .background(bookProbeDotColor(rec?.status), CircleShape),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            s.name, fontWeight = FontWeight.Bold, fontSize = 15.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            bookProbeText(rec),
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        // v0.201.0：有发现分类的源行末加「发现」入口（进书架子结构内的发现页）
-                        if (s.exploreUrl.isNotBlank()) {
-                            Text(
-                                "发现",
-                                fontSize = 13.sp,
-                                color = accent,
-                                modifier = Modifier
-                                    .clickable { onOpenExplore(s.key) }
-                                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                            )
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        AppSwitch(
-                            checked = s.enabled,
-                            onCheckedChange = {
-                                scope.launch {
-                                    // v0.188.0：写盘失败提示“保存失败”；管理器已回滚
-                                    // 内存表，开关随 StateFlow 旧值自动弹回，不用手动复位。
-                                    if (!BookSourceManager.setEnabled(context, s.key, it)) {
-                                        AppToast.show(context, "保存失败", long = false)
-                                    }
-                                }
-                            },
-                        )
-                        Box(
-                            modifier = Modifier.size(32.dp).clickable { editTarget = s },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Filled.Edit, "编辑", tint = accent, modifier = Modifier.size(20.dp))
-                        }
-                        Box(
-                            modifier = Modifier.size(32.dp).clickable { deleteTarget = s },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Filled.Delete,
-                                "删除",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
+            // v1.4.27 P0.2：书源分组展示——按 group 字段（取第一个分组名）分段，组头可折叠；
+            // 只有一个分组（含全是“未分组”）时不出组头，与改版前扁平列表一样。搜索时全部展开。
+            jsonGroups.forEach { (groupName, groupList) ->
+                val showHeaders = jsonGroups.size > 1
+                val collapsed = showHeaders && srcQuery.isBlank() && groupName in collapsedGroups
+                if (showHeaders) {
+                    item(key = "jgrp_$groupName") {
+                        SourceGroupHeader(groupName, groupList.size, collapsed, onToggle = {
+                            collapsedGroups = if (groupName in collapsedGroups) collapsedGroups - groupName
+                            else collapsedGroups + groupName
+                        })
                     }
+                }
+                if (!collapsed) items(groupList, key = { "json_${it.key}" }) { s ->
+                    // 点卡进字段编辑，长按进文本编辑（与原来点行/长按一致）。
+                    val row = SourceRow.Json(s)
+                    // v1.1.3：连通状态点＋耗时（发现页探测结果；没去过发现页即“未测”）。
+                    val health = probeMap[s.key].toSourceHealth()
+                    SourceCompactRow(
+                        name = s.name,
+                        statusText = health.shortLabel,
+                        statusColor = palette.healthColor(health),
+                        dotColor = palette.healthColor(health),
+                        enabled = s.enabled,
+                        onEnabledChange = {
+                            scope.launch {
+                                // v0.188.0：写盘失败提示“保存失败”；管理器已回滚，开关随 StateFlow 旧值弹回。
+                                if (!BookSourceManager.setEnabled(context, s.key, it)) {
+                                    AppToast.show(context, "保存失败", long = false)
+                                }
+                            }
+                        },
+                        testPhase = testRunner.phaseOf(row.selectKey),
+                        onTest = {
+                            // v1.4.27 搜索测试：▶ 放开关之前（定稿布局 A 的同组位置）；点后弹关键词输入框。
+                            testKeyword = s.effectiveCheckKeyWord
+                            testInputFor = s
+                        },
+                        onEdit = { editTarget = s },
+                        onDelete = { deleteTarget = s },
+                        onClick = { editTarget = s },
+                        onLongClick = { textEditJson = s },
+                        batchMode = batchMode,
+                        selected = row.selectKey in selectedSrcKeys,
+                        onSelect = { selectedSrcKeys = SourceRow.toggled(selectedSrcKeys, row.selectKey, it) },
+                        // v0.201.0：有发现分类的源加「发现」入口
+                        onExplore = if (s.exploreUrl.isNotBlank()) ({ onOpenExplore(s.key) }) else null,
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
             if (shownPy.isEmpty() && shownJson.isEmpty()) {
                 item(key = "empty") {
-                    Box(
-                        Modifier.fillMaxWidth().padding(top = 48.dp),
-                        contentAlignment = Alignment.Center,
+                    NovelEmptyState(
+                        icon = if (srcQuery.isBlank()) Icons.Outlined.Inbox else Icons.Outlined.SearchOff,
+                        text = if (srcQuery.isBlank()) "还没有书源" else "没有匹配的书源",
+                        modifier = Modifier.fillMaxWidth(),
+                        actionText = if (srcQuery.isBlank()) "导入书源" else null,
+                        onAction = if (srcQuery.isBlank()) ({ showImportMenu = true }) else null,
+                    )
+                }
+            }
+        }
+        // v0.197.0：底部批量栏（阅读式：全选 / 反选 / 删除）；Step 4 换玻璃底栏 48dp【自定高度，与顶栏同档】。
+        if (batchMode) {
+            GlassSurface(
+                Modifier.padding(horizontal = NovelTokens.RowMarginH).padding(top = 8.dp).fillMaxWidth().height(NovelTokens.BarHeight),
+            ) {
+                Row(
+                    Modifier.fillMaxSize().padding(horizontal = NovelTokens.BarInnerPad),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // v1.4.27 Step4 审稿 A4：全选改并集（保留折叠组里已勾的行）；计数直接显示已选数。
+                    TextButton(onClick = { selectedSrcKeys = SourceRow.selectAllVisible(selectedSrcKeys, visibleSelectKeys) }) {
+                        Text("全选（已选 ${selectedSrcKeys.size}）", fontSize = 12.sp, color = palette.title)
+                    }
+                    TextButton(onClick = {
+                        selectedSrcKeys = visibleSelectKeys.filter { it !in selectedSrcKeys }.toSet()
+                    }) { Text("反选", fontSize = 12.sp, color = palette.title) }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { batchMode = false; selectedSrcKeys = emptySet() }) {
+                        Text("取消", fontSize = 12.sp, color = palette.body)
+                    }
+                    TextButton(
+                        enabled = selectedSrcKeys.isNotEmpty(),
+                        onClick = { batchDeleteConfirm = true },
                     ) {
-                        Text(
-                            if (srcQuery.isBlank()) "还没有书源，点顶部导入" else "没有匹配的书源",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Text("删除", fontSize = 12.sp, color = if (selectedSrcKeys.isNotEmpty()) palette.error else palette.hint)
                     }
                 }
             }
         }
-        // v0.197.0：底部批量栏（阅读式：全选 / 反选 / 删除）
-        if (batchMode) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = { selectedSrcKeys = allShownKeys.toSet() }) {
-                    Text("全选（${selectedSrcKeys.size}/${allShownKeys.size}）")
-                }
-                TextButton(onClick = {
-                    selectedSrcKeys = allShownKeys.filter { it !in selectedSrcKeys }.toSet()
-                }) {
-                    Text("反选")
-                }
-                TextButton(
-                    enabled = selectedSrcKeys.isNotEmpty(),
-                    onClick = { batchDeleteConfirm = true },
-                ) {
-                    Text("删除")
-                }
-            }
-        }
+    }
     }
 
     // v0.197.0：批量删除确认
@@ -744,20 +638,10 @@ fun BookSourceScreen(
                     // v0.217.0（F45）：报实删数——原来直接报勾选数，个别源
                     // 写盘失败也算“已删除”；JSON 删除无返回值，按单删同款
                     // “删完 key 还在即失败”逐个验。
-                    var okCount = 0
-                    withContext(Dispatchers.IO) {
-                        keys.forEach { k ->
-                            when {
-                                k.startsWith("py_") -> {
-                                    if (PyBookSourceManager.remove(context, k.removePrefix("py_"))) okCount++
-                                }
-                                k.startsWith("json_") -> {
-                                    val key = k.removePrefix("json_")
-                                    BookSourceManager.remove(context, key)
-                                    if (BookSourceManager.sources.value.none { it.key == key }) okCount++
-                                }
-                            }
-                        }
+                    // v1.4.27 解缠⑧：批量删除与单删共用 SourceRowActions。
+                    keys.forEach { testRunner.cancel(it) }
+                    val okCount = withContext(Dispatchers.IO) {
+                        SourceRowActions.deleteBySelectKeys(context, keys)
                     }
                     selectedSrcKeys = emptySet()
                     batchMode = false
@@ -774,7 +658,7 @@ fun BookSourceScreen(
             },
         ) {
             Text(
-                "删除后找书不再用这些源；书架里用这些源的书将无法追更，阅读时需要换源。" +
+                "删除后找书不再用这些源；书架里用这些源的书将无法追更，阅读时需要换源。删除的书源进回收站，可恢复。" +
                     (batchAffectedCount?.let { n ->
                         if (n > 0) " 本次删除影响书架上 $n 本书。" else ""
                     } ?: ""),
@@ -984,8 +868,8 @@ fun BookSourceScreen(
                 scope.launch {
                     // v0.186.0：JSON 删除无 Boolean 返回值，写盘失败时内存回滚、
                     // 删完 key 还在就是保存失败；成功时保持原来不弹提示。
-                    BookSourceManager.remove(context, s.key)
-                    if (BookSourceManager.sources.value.any { it.key == s.key }) {
+                    testRunner.cancel(SourceRow.Json(s).selectKey) // 删源取消该行在测/排队的测试（C4/C5）
+                    if (!SourceRowActions.delete(context, SourceRow.Json(s))) {
                         AppToast.show(context, "删除失败：保存失败，请重试", long = false)
                     }
                 }
@@ -993,7 +877,7 @@ fun BookSourceScreen(
             },
         ) {
             Text(
-                "确定删除「${s.name}」？" +
+                "确定删除「${s.name}」？删除后进回收站，可恢复。" +
                     (deleteAffectedCount?.let { n ->
                         if (n > 0) " 书架上有 $n 本书在用这个源，删后这些书将无法追更，阅读时需要换源。" else ""
                     } ?: ""),
@@ -1011,7 +895,8 @@ fun BookSourceScreen(
                 scope.launch {
                     // v0.186.0：PY 删除返回 false 即文件删除失败，弹保存失败提示；
                     // 成功时保持原来不弹提示。
-                    val ok = PyBookSourceManager.remove(context, r.name)
+                    testRunner.cancel(SourceRow.Py(r).selectKey)
+                    val ok = SourceRowActions.delete(context, SourceRow.Py(r))
                     if (!ok) {
                         AppToast.show(context, "删除失败：保存失败，请重试", long = false)
                     }
@@ -1020,7 +905,7 @@ fun BookSourceScreen(
             },
         ) {
             Text(
-                "确定删除本地 PY 书源「${r.title}」？文件也会被删除。" +
+                "确定删除本地 PY 书源「${r.title}」？文件会移入回收站，可恢复。" +
                     (deletePyAffectedCount?.let { n ->
                         if (n > 0) " 书架上有 $n 本书在用这个源，删后这些书将无法追更，阅读时需要换源。" else ""
                     } ?: ""),
@@ -1092,6 +977,8 @@ fun BookSourceScreen(
                         SourceField("作者", draft.ruleSearchAuthor, hint = "ruleSearch.author") { draft = draft.copy(ruleSearchAuthor = it) }
                         SourceField("封面", draft.ruleSearchCover, hint = "ruleSearch.coverUrl") { draft = draft.copy(ruleSearchCover = it) }
                         SourceField("详情地址", draft.ruleSearchBookUrl, hint = "ruleSearch.bookUrl") { draft = draft.copy(ruleSearchBookUrl = it) }
+                        // v1.4.27 搜索测试：测试关键词（ruleSearch.checkKeyWord），保存走原 updateSourceJson。
+                        SourceField("测试关键词", draft.checkKeyWord, hint = "空则用「${BookSource.DEFAULT_CHECK_KEYWORD}」") { draft = draft.copy(checkKeyWord = it) }
                     }
                     2 -> {
                         SourceField("书名", draft.ruleBookName, hint = "ruleBookInfo.name") { draft = draft.copy(ruleBookName = it) }
@@ -1104,7 +991,7 @@ fun BookSourceScreen(
                         SourceField("目录列表", draft.ruleTocList, hint = "ruleToc.chapterList") { draft = draft.copy(ruleTocList = it) }
                         SourceField("章节名", draft.ruleTocTitle, hint = "ruleToc.chapterName") { draft = draft.copy(ruleTocTitle = it) }
                         SourceField("章节地址", draft.ruleTocUrl, hint = "ruleToc.chapterUrl") { draft = draft.copy(ruleTocUrl = it) }
-                        SourceField("目录下一页", draft.ruleTocNext, hint = "ruleToc.nextTocUrl，JS 源才跟分页") { draft = draft.copy(ruleTocNext = it) }
+                        SourceField("目录下一页", draft.ruleTocNext, hint = "ruleToc.nextTocUrl，跟目录分页（最多 50 页）") { draft = draft.copy(ruleTocNext = it) }
                     }
                     4 -> {
                         SourceField("正文", draft.ruleContent, hint = "ruleContent.content，空则走通用正文兜底") { draft = draft.copy(ruleContent = it) }
@@ -1188,19 +1075,119 @@ fun BookSourceScreen(
         }
     }
 
-    // v0.67.0：PY 源测试结果
-    testResult?.let { msg ->
-        TechDialog(
-            onDismissRequest = { testResult = null },
-            title = "连通性测试",
-            dismissText = "知道了",
-        ) {
-            Text(msg)
+    // v1.4.27 搜索测试：关键词输入弹窗（标题「搜索测试」＋副标题源名；预填源 checkKeyWord／「斗罗」；
+    // 自动弹键盘、回车即测；空白回落「斗罗」；词只用于本次，不回写源文件）。
+    testInputFor?.let { src ->
+        val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+        fun confirm() {
+            val key = src.key
+            val kw = testKeyword
+            testInputFor = null
+            testRunner.result = null
+            testRunner.submit(SourceRow.Json(src).selectKey) { SourceRowActions.testJson(key, kw) }
         }
+        TechDialog(
+            onDismissRequest = { testInputFor = null },
+            title = "搜索测试",
+            subtitle = src.name,
+            confirmText = "测试",
+            onConfirm = { confirm() },
+        ) {
+            TechTextField(
+                value = testKeyword,
+                onValueChange = { testKeyword = it },
+                placeholder = BookSource.DEFAULT_CHECK_KEYWORD,
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { confirm() }),
+            )
+        }
+        LaunchedEffect(src.key) { runCatching { focus.requestFocus() } }
+    }
+
+    // v1.4.27 P0.7：书源回收站弹窗（最小 UI）：逐条恢复 / 彻底删除，底部清空。
+    if (showTrash) {
+        TechDialog(
+            onDismissRequest = { showTrash = false },
+            title = "书源回收站",
+            subtitle = if (trashEntries.isEmpty()) null else "${trashEntries.size} 个书源",
+            confirmText = "清空",
+            confirmEnabled = trashEntries.isNotEmpty(),
+            confirmDanger = true,
+            onConfirm = { trashClearConfirm = true },
+            dismissText = "关闭",
+        ) {
+            if (trashEntries.isEmpty()) {
+                Text("回收站是空的。删除的书源会先放在这里，可以恢复。", fontSize = 13.sp)
+            } else {
+                Column {
+                    trashEntries.forEach { e ->
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.weight(1f)) {
+                                Text(e.title.ifBlank { e.originKey }, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    (if (e.kind == NovelSourceTrash.KIND_PY) "PY · " else "JSON · ") +
+                                        java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(e.deletedAt)),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    val r = SourceRowActions.restore(context, e)
+                                    trashTick++
+                                    AppToast.show(context, SourceRowActions.restoreMessage(e.title, r), long = false)
+                                }
+                            }) { Text("恢复", fontSize = 12.sp) }
+                            TextButton(onClick = { trashPurgeTarget = e }) {
+                                Text("彻底删除", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    trashPurgeTarget?.let { e ->
+        TechDialog(
+            onDismissRequest = { trashPurgeTarget = null },
+            title = "彻底删除",
+            confirmText = "彻底删除",
+            confirmDanger = true,
+            onConfirm = {
+                trashPurgeTarget = null
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) { NovelSourceTrash.of(context).drop(e.id) }
+                    trashTick++
+                    if (!ok) AppToast.show(context, "删除失败：保存失败，请重试", long = false)
+                }
+            },
+        ) { Text("「${e.title.ifBlank { e.originKey }}」将被永久删除，不能再恢复。") }
+    }
+    if (trashClearConfirm) {
+        TechDialog(
+            onDismissRequest = { trashClearConfirm = false },
+            title = "清空回收站？",
+            confirmText = "清空",
+            confirmDanger = true,
+            onConfirm = {
+                trashClearConfirm = false
+                scope.launch {
+                    val n = withContext(Dispatchers.IO) { NovelSourceTrash.of(context).clear() }
+                    trashTick++
+                    AppToast.show(context, if (n > 0) "已清空 $n 个书源" else "清空失败，请重试", long = false)
+                }
+            },
+        ) { Text("回收站里的 ${trashEntries.size} 个书源将被永久删除，不能再恢复。") }
+    }
+
+    // v0.67.0：测试结果；v1.4.27 结构化；Step 4 换 88%×60% 五档结果弹窗（与搜索验证弹窗同款）。
+    testRunner.result?.let { r ->
+        SourceTestResultDialog(r) { testRunner.result = null }
     }
 }
 
-/** v0.227.0：导入方式选项行——图标+文字整行可点，原 ImportAction 四钮并成弹窗后改用它 */
 @Composable
 private fun ImportMenuItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -1334,26 +1321,6 @@ private fun SourceTextEditorDialog(
     }
 }
 
-/** v1.1.3：探测状态点颜色（与发现探测同口径）：通绿、慢黄、不通红、未测灰。 */
 /** v1.3.33：书源列表里有没有 URL 形式的 jsLib（纯函数，可单测）——有则返回第一个命中的书源名，供导入/保存入口明确拒绝。 */
 internal fun firstJsLibUrlSourceName(sources: List<BookSource>): String? =
     sources.firstOrNull { LegadoJsEngine.isJsLibUrl(it.jsLib) }?.name
-
-private fun bookProbeDotColor(status: String?): Color = when (status) {
-    // v1.2.14 E片：探测状态点是 3:1 图形——原色浅色底只有 1.79/1.80/2.91:1；
-    // 通改 #15803D（4.78/3.69）、慢改 #9A6B0F（4.46/3.96）、不通改 #D92D20（4.60/3.84），
-    // 未测灰 #6B7385（4.53/3.90）达标不动。
-    "OK" -> Color(0xFF15803D)
-    "SLOW" -> Color(0xFF9A6B0F)
-    "FAIL" -> Color(0xFFD92D20)
-    else -> Color(0xFF6B7385)
-}
-
-/** v1.1.3：探测状态文案＋耗时（不通不记耗时，探测失败时 ms 为 0）；只陈述连通结果，不含评分含义。 */
-private fun bookProbeText(rec: BookProbeRecord?): String = when {
-    rec == null -> "未测"
-    rec.status == "FAIL" -> "不通"
-    rec.status == "SLOW" -> "慢 ${rec.ms}ms"
-    rec.status == "OK" -> "通 ${rec.ms}ms"
-    else -> "未测"
-}

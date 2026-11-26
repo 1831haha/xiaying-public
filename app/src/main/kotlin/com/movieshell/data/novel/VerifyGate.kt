@@ -55,7 +55,7 @@ object VerifyGate {
         url: String,
         title: String,
         ua: String?,
-        timeoutMs: Long = 180_000,
+        timeoutMs: Long = VerifyPolicy.FOREGROUND_TIMEOUT_MS,
     ): Result? {
         deferred?.cancel()
         val d = CompletableDeferred<Result?>()
@@ -79,7 +79,7 @@ object VerifyGate {
      * 已落地，即算通过，取 HTML + Cookie 返回；超时、没上下文、任何异常都
      * 返回 null，调用方再弹可见验证页。
      */
-    suspend fun awaitVerifyBackground(url: String, ua: String?, timeoutMs: Long = 30_000): Result? {
+    suspend fun awaitVerifyBackground(url: String, ua: String?, timeoutMs: Long = VerifyPolicy.BACKGROUND_TIMEOUT_MS): Result? {
         val ctx = appContext ?: return null
         return try {
             withContext(Dispatchers.Main) {
@@ -109,12 +109,11 @@ object VerifyGate {
                                 val html = evalHtml(view)
                                 if (html.isNotBlank()) {
                                     val cookies = collectCookies(url, pageUrl)
-                                    val passed = cookies.contains("cf_clearance=") ||
-                                        (challengeMarkers.none { html.contains(it) } && html.length > 500)
-                                    if (passed) outcome = Result(html, pageUrl, cookies)
+                                    // v1.4.27 解缠⑨：判过口径收到 VerifyPolicy（逐字等价）。
+                                    if (VerifyPolicy.backgroundPassed(html, cookies)) outcome = Result(html, pageUrl, cookies)
                                 }
                             }
-                            if (outcome == null) delay(1500)
+                            if (outcome == null) delay(VerifyPolicy.BACKGROUND_POLL_MS)
                         }
                     }
                     outcome
@@ -131,15 +130,9 @@ object VerifyGate {
         }
     }
 
-    private val challengeMarkers = listOf(
-        "Just a moment",
-        "cf-challenge",
-        "Attention Required",
-        "Checking if the site connection is secure",
-    )
-
-    /** v0.250.0：正文 200 提空时复用同一组挑战标记判验证页，不另起一套。 */
-    fun looksLikeChallenge(html: String): Boolean = challengeMarkers.any { html.contains(it) }
+    /** v0.250.0：正文 200 提空时复用同一组挑战标记判验证页，不另起一套。
+     * v1.4.27 解缠⑨：特征词表搬到 VerifyPolicy.CHALLENGE_MARKERS，这里只转发。 */
+    fun looksLikeChallenge(html: String): Boolean = VerifyPolicy.looksLikeChallenge(html)
 
     private suspend fun evalHtml(view: WebView): String = suspendCancellableCoroutine { cont ->
         view.evaluateJavascript("(function(){return document.documentElement.outerHTML})()") { raw ->
@@ -147,17 +140,12 @@ object VerifyGate {
         }
     }
 
-    private fun collectCookies(vararg urls: String): String {
-        return urls
-            .flatMap { u -> CookieManager.getInstance().getCookie(u).orEmpty().split(";") }
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-            .joinToString("; ")
-    }
+    /** 原地址与落地地址的 Cookie 合并（验证可能跨域）。v1.4.27：合并口径在 VerifyPolicy，验证窗共用。 */
+    fun collectCookies(vararg urls: String): String =
+        VerifyPolicy.mergeCookieHeaders(urls.map { u -> CookieManager.getInstance().getCookie(u) })
 
-    /** evaluateJavascript 回调是 JSON 字符串字面量，包一层再取即得原文（验证窗同款）。 */
-    private fun decodeHtml(raw: String?): String {
+    /** evaluateJavascript 回调是 JSON 字符串字面量，包一层再取即得原文（v1.4.27：验证窗共用这一份）。 */
+    fun decodeHtml(raw: String?): String {
         if (raw.isNullOrBlank()) return ""
         return runCatching { JSONObject("{\"v\":$raw}").getString("v") }.getOrDefault("")
     }

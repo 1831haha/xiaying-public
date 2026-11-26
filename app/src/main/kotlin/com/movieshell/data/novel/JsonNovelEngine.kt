@@ -16,8 +16,8 @@ import com.movieshell.domain.source.NovelEngine
  */
 class JsonNovelEngine(private val context: Context, private val source: BookSource) : NovelEngine {
 
-    override suspend fun search(keyword: String, allowGate: Boolean): List<NovelSearchResult> =
-        NovelSourceEngine.search(source, keyword, allowGate)
+    override suspend fun search(keyword: String, allowGate: Boolean, page: Int): List<NovelSearchResult> =
+        NovelSourceEngine.search(source, keyword, allowGate, pageNum = page)
 
     override suspend fun chapters(book: NovelSearchResult): List<ChapterMeta> =
         NovelSourceEngine.chapters(source, book)

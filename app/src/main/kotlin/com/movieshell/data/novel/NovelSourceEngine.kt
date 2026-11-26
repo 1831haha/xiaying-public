@@ -19,6 +19,7 @@ import com.movieshell.domain.model.ContentFail
 import com.movieshell.domain.model.ContentResult
 import com.movieshell.domain.model.NovelSearchResult
 import com.movieshell.domain.model.ParagraphComment
+import com.movieshell.domain.model.TestSearchResult
 import com.movieshell.domain.source.NovelEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +47,8 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.SSLException
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 
 /**
  * v0.61.0 书源执行引擎：把 BookSource 规则跑通
@@ -117,6 +120,36 @@ object NovelSourceEngine {
     fun failedSearchLabel(): String? =
         if (failedSearchNames.isEmpty()) null else "${failedSearchNames.size} 个书源失败"
 
+    /**
+     * v1.4.27：按调用隔离的失败收集器（协程上下文元素）。
+     * failedSearchNames 是全局集合、聚合搜索（searchAllFlow，不持任何锁，只有
+     * searchSemaphore 限并发）随时在写；书源管理页的搜索测试若也 clear/读全局集合，
+     * 会清掉聚合搜索刚记的失败、或把聚合里别的源的失败当成本源失败。互斥锁解决不了
+     * （testMutex 是 BookSourceScreen 里 remember 的 UI 锁，searchAllFlow 不经过它）。
+     * 做法：testSearch 用 withContext 挂一个本次专属收集器，search() 里的失败记录
+     * 经 [recordSearchFailure] 优先写进当前协程上下文里的收集器；上下文里没有收集器
+     * （找书页聚合搜索、换源、追更检查等全部老调用方）时照旧写全局 failedSearchNames，
+     * 老行为一字不变。
+     */
+    private class SearchFailureCollector : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<SearchFailureCollector>
+
+        private val names = ConcurrentHashMap.newKeySet<String>()
+
+        fun add(name: String) {
+            names.add(name)
+        }
+
+        fun contains(name: String): Boolean = names.contains(name)
+    }
+
+    /** v1.4.27：记一笔搜书失败——当前协程挂了专属收集器就记进去，否则记全局（老行为）。
+     * 解缠①：internal——PY 链路搬到 PyNovelEngine 后仍经此记失败（汇总口径不变）。 */
+    internal suspend fun recordSearchFailure(name: String) {
+        val scoped = currentCoroutineContext()[SearchFailureCollector]
+        if (scoped != null) scoped.add(name) else failedSearchNames.add(name)
+    }
+
     // v1.1.6：ContentFail / ContentResult 已移入 domain/model（NovelModels.kt），
     // 供 NovelEngine 契约与 UI 共用。
 
@@ -144,6 +177,9 @@ object NovelSourceEngine {
 
     /** v0.199.0：该源是否用到 JS 能力（是则走 LegadoJsEngine，否则走老 CSS 路径，原样不动）。 */
     private fun isJsSource(source: BookSource): Boolean = LegadoJsEngine.isJsSource(source.toJsRuleSource())
+
+    /** v1.4.27：对外的“是否 JS 源”（目录服务判断“展开全部”能否走非 JS 通道用）。 */
+    fun isJsBookSource(source: BookSource): Boolean = isJsSource(source)
 
     private fun uaOf(source: BookSource): String? = source.headerUa.ifBlank { null }
 
@@ -394,6 +430,9 @@ object NovelSourceEngine {
         label: String = "搜书",
         fetch: suspend () -> BookRuleEngine.FetchOutcome,
     ): PageResult? {
+        // v1.4.27 解缠⑨（为什么走这条）：用户主动发起的抓取——先后台静默（多数 JS 挑战
+        // 自己就过，不打扰用户），过不了才弹前台让用户手动过；allowGate=false 的后台任务
+        // 一律不验证（不能弹窗）。通道分工与超时见 VerifyPolicy。
         if (!allowGate) return null
         val bg = runCatching { VerifyGate.awaitVerifyBackground(gateUrl, ua) }
             .onFailure { if (it is CancellationException) throw it }
@@ -418,6 +457,8 @@ object NovelSourceEngine {
         allowGate: Boolean = false,
         pageNum: Int = 1,
     ): List<NovelSearchResult> {
+        // v1.4.27（取消修法①，防御收尾）：已取消的协程不进搜索、不写任何诊断态。
+        currentCoroutineContext().ensureActive()
         applySourceNetConfig(source)
         if (source.searchUrl.isBlank() || source.ruleSearchList.isBlank()) return emptyList()
         if (!isJsSource(source)) {
@@ -425,12 +466,12 @@ object NovelSourceEngine {
             val ctx = LegadoJsEngine.JsCtx(source = source.toJsRuleSource(), baseUrl = source.url, keyword = keyword, page = pageNum)
             val req = buildSearchReq(source, keyword, ctx, state, pageNum) ?: run {
                 // v1.1.12：搜索地址算不出来是搜失败了，不是“没书”。
-                failedSearchNames.add(source.name)
+                recordSearchFailure(source.name)
                 return emptyList()
             }
             val searchHost = hostOf(req.url)
             if (isHostDead(searchHost)) {
-                failedSearchNames.add(source.name)
+                recordSearchFailure(source.name)
                 return emptyList()
             }
             var lastOutcome: BookRuleEngine.FetchOutcome? = null
@@ -440,8 +481,10 @@ object NovelSourceEngine {
                         .also { lastOutcome = it }
                 }
             }?.body ?: run {
+                // v1.4.27（取消修法①）：取消的协程不记失败、不记死站。
+                currentCoroutineContext().ensureActive()
                 // v1.1.12：页没抓到是搜失败了，不是“没书”——记一笔，搜书页据此分开说。
-                failedSearchNames.add(source.name)
+                recordSearchFailure(source.name)
                 markDeadHostIfConnectivityError(searchHost, lastOutcome)
                 return emptyList()
             }
@@ -469,12 +512,12 @@ object NovelSourceEngine {
             val ctx = LegadoJsEngine.JsCtx(source = source.toJsRuleSource(), baseUrl = source.url, keyword = keyword, page = pageNum)
             val req = buildSearchReq(source, keyword, ctx, state, pageNum) ?: run {
                 // v1.1.12：搜索地址算不出来是搜失败了，不是“没书”。
-                failedSearchNames.add(source.name)
+                recordSearchFailure(source.name)
                 return@withContext emptyList()
             }
             val searchHost = hostOf(req.url)
             if (isHostDead(searchHost)) {
-                failedSearchNames.add(source.name)
+                recordSearchFailure(source.name)
                 return@withContext emptyList()
             }
             var lastOutcome: BookRuleEngine.FetchOutcome? = null
@@ -485,10 +528,12 @@ object NovelSourceEngine {
                 }
             }
             if (page == null) {
+                // v1.4.27（取消修法①）：取消的协程不记失败、不记死站。
+                currentCoroutineContext().ensureActive()
                 // v0.223.0：搜书诊断——未抓到页以前是静默空，记一行才能分清是请求问题还是解析问题。
                 LogBus.w(TAG, "搜书诊断 ${source.name} 未抓到页")
                 // v1.1.12：同上，记一笔失败。
-                failedSearchNames.add(source.name)
+                recordSearchFailure(source.name)
                 markDeadHostIfConnectivityError(searchHost, lastOutcome)
                 return@withContext emptyList()
             }
@@ -530,6 +575,56 @@ object NovelSourceEngine {
                     cover = LegadoJsEngine.evalTextRule(el, page.url, source.ruleSearchCover, pageCtx, state).ifBlank { null },
                 )
             }.distinctBy { it.remoteId }
+        }
+    }
+
+    /**
+     * v1.4.27：书源搜索测试（书源管理页行内 ▶ 用；UI 在自己的 testMutex 锁内调用，
+     * 锁内拿到锁才开始计时，排队等待不计入 timeoutMs）。
+     *
+     * - searchUrl / ruleSearchList 任一为空 → [TestSearchResult.NotConfigured]，不发请求（与 search() 的 `||` 同口径）；
+     * - 关键词：入参 trim 后为空则用源的 checkKeyWord，再空回退「斗罗」（[BookSource.effectiveCheckKeyWord]）；
+     * - 失败判定只看本次专属收集器（见 [SearchFailureCollector]）：测前“清”= 新建空收集器，
+     *   测后读它定档；不 clear、不读全局 failedSearchNames，与并发的聚合搜索互不污染；
+     * - 死站：不在这里另做预检（searchUrl 经 JS/模板/选项 js 求值后 host 可能变），
+     *   靠 search() 构造请求后对 req.url 的 isHostDead 判断，命中即记失败 → Failed；
+     * - allowGate 固定 false：测试不弹验证窗；
+     * - 超时由 withTimeoutOrNull 单独识别（不靠失败名单），配合 BookRuleEngine 的
+     *   可取消抓取（取消修法②），到点即 cancel 底层 Call，是真墙钟超时；
+     * - 调用方取消（删源/退页）原样抛 CancellationException，不返回任何档位。
+     *
+     * 已知限制：JS 规则里的 java.ajax 走 LegadoJsEngine 同步请求，取消不掉，
+     * 这类源的测试可能超过 timeoutMs 才返回 Timeout。
+     */
+    suspend fun testSearch(
+        source: BookSource,
+        keyword: String = "",
+        timeoutMs: Long = SEARCH_SOURCE_TIMEOUT_MS,
+    ): TestSearchResult {
+        currentCoroutineContext().ensureActive()
+        if (source.searchUrl.isBlank() || source.ruleSearchList.isBlank()) {
+            return TestSearchResult.NotConfigured
+        }
+        val actualKeyword = keyword.trim().ifBlank { source.effectiveCheckKeyWord }
+        // 测前“清”：本次专属收集器，生来为空
+        val failures = SearchFailureCollector()
+        val results = withTimeoutOrNull(timeoutMs.coerceAtLeast(1L)) {
+            withContext(failures) {
+                runCatching { search(source, actualKeyword, allowGate = false) }
+                    .onFailure {
+                        // 超时/取消原样抛（withTimeoutOrNull 据此回 null）；不算源失败
+                        if (it is CancellationException) throw it
+                        failures.add(source.name)
+                        LogBus.w(TAG, "搜索测试失败 ${source.name}: ${it.message}")
+                    }
+                    .getOrDefault(emptyList())
+            }
+        } ?: return TestSearchResult.Timeout
+        // 测后读：只读本次收集器定档
+        return when {
+            results.isNotEmpty() -> TestSearchResult.Ok(results.size)
+            failures.contains(source.name) -> TestSearchResult.Failed
+            else -> TestSearchResult.Zero
         }
     }
 
@@ -617,8 +712,15 @@ object NovelSourceEngine {
      *
      * v0.89.0：支持 ruleBookTocUrl（详情页→目录页两步跳转）——有些站详情页不内嵌
      * 目录，只有一个"章节列表"按钮（如全本小说网）；规则为空时保持旧行为。
+     *
+     * v1.4.27 P0.3 长书目录补全：
+     * - 非 JS 源也跟 ruleTocNext 分页（改版前只有 JS 源跟，编辑页 hint 原话“JS 源才跟分页”），
+     *   最多 [MAX_TOC_PAGES] 页、按章节 URL 去重、访问过的页不再抓；
+     * - [expand]=true（详情页“展开全部”）：非 JS 源额外找页上的“展开全部/全部章节/完整目录”这类
+     *   **普通链接**跟过去再解析一次，章数更多才用。靠网页脚本点击展开的站这里拿不到——
+     *   那要 WebView 方案，不在本版（README 写明覆盖范围）。JS 源的 expand 与普通抓取相同。
      */
-    suspend fun chapters(source: BookSource, book: NovelSearchResult): List<ChapterMeta> {
+    suspend fun chapters(source: BookSource, book: NovelSearchResult, expand: Boolean = false): List<ChapterMeta> {
         applySourceNetConfig(source)
         val detailUrl = book.remoteId.ifBlank { return emptyList() }
         if (!isJsSource(source)) {
@@ -675,6 +777,8 @@ object NovelSourceEngine {
             val tocPage = BookRuleEngine.fetchPageWithOptions(tocUrl, options = fetchOptions(source)) ?: return emptyList()
             // 目录页可能是详情页（规则里 toc 列表直接在详情页上）
             var (result, usedFallback) = parseTocPage(tocPage.body, tocPage.url)
+            // v1.4.27 P0.3：最后一张被采用的目录页（分页从它往后跟）
+            var lastPage: PageResult = tocPage
             var triedUrl: String? = null
             if (result.isEmpty()) {
                 val fallbackUrl = BookRuleEngine.findTocLink(tocPage.body, tocPage.url)
@@ -685,6 +789,7 @@ object NovelSourceEngine {
                         val (r2, f2) = parseTocPage(fallbackPage.body, fallbackPage.url)
                         result = r2
                         usedFallback = f2
+                        lastPage = fallbackPage
                         LogBus.d(TAG, "目录兜底 ${source.name} 跟进 $fallbackUrl 解析出 ${result.size} 章")
                     }
                 }
@@ -700,8 +805,56 @@ object NovelSourceEngine {
                         if (more.size > result.size) {
                             LogBus.d(TAG, "目录兜底 ${source.name} 目录页 ${more.size} 章多于当前 ${result.size} 章，用目录页")
                             result = more
+                            lastPage = morePage
                         }
                     }
+                }
+            }
+            // v1.4.27 P0.3：非 JS 源跟 ruleTocNext 分页（单 URL 循环跟随；多 URL 逐页抓一次）。
+            val visited = mutableSetOf(tocPage.url, lastPage.url)
+            suspend fun followNext(start: PageResult, first: List<ChapterMeta>): List<ChapterMeta> {
+                if (source.ruleTocNext.isBlank() || first.isEmpty()) return first
+                val acc = first.toMutableList()
+                val jsCtx = LegadoJsEngine.JsCtx(source = source.toJsRuleSource(), baseUrl = start.url, bookName = book.title, bookUrl = book.remoteId)
+                val state = LegadoJsEngine.JsState(source.key)
+                var page = start
+                var n = 0
+                while (n++ < MAX_TOC_PAGES) {
+                    val nexts = runCatching {
+                        LegadoJsEngine.evalNextUrls(page.body, page.url, source.ruleTocNext, jsCtx.copy(baseUrl = page.url), state)
+                    }.getOrDefault(emptyList()).map { absUrl(page.url, it.trim()) }.filter { it !in visited }
+                    if (nexts.isEmpty()) break
+                    var nextPage: PageResult? = null
+                    for (u in nexts) {
+                        visited += u
+                        val p = BookRuleEngine.fetchPageWithOptions(u, options = fetchOptions(source)) ?: continue
+                        acc += parseTocPage(p.body, p.url).first
+                        nextPage = p
+                    }
+                    if (nexts.size > 1) break
+                    page = nextPage ?: break
+                }
+                return dedupToc(acc)
+            }
+            if (source.ruleTocNext.isNotBlank()) {
+                val before = result.size
+                result = followNext(lastPage, result)
+                if (result.size != before) LogBus.d(TAG, "目录分页 ${source.name} 跟 ruleTocNext 由 $before 章到 ${result.size} 章")
+            }
+            // v1.4.27 P0.3：详情页“展开全部”——找页上的展开/全部章节普通链接，跟过去取章数多的那份。
+            if (expand) {
+                val link = BookRuleEngine.findExpandTocLink(lastPage.body, lastPage.url)
+                    ?: BookRuleEngine.findExpandTocLink(tocPage.body, tocPage.url)
+                if (link != null && link !in visited) {
+                    visited += link
+                    val p = BookRuleEngine.fetchPageWithOptions(link, options = fetchOptions(source))
+                    if (p != null) {
+                        val full = followNext(p, parseTocPage(p.body, p.url).first)
+                        LogBus.d(TAG, "目录展开 ${source.name} 跟 $link 解析出 ${full.size} 章（原 ${result.size} 章）")
+                        if (full.size > result.size) result = full
+                    }
+                } else {
+                    LogBus.d(TAG, "目录展开 ${source.name} 页上没有可跟的展开链接（可能要网页脚本展开）")
                 }
             }
             return result
@@ -859,6 +1012,17 @@ object NovelSourceEngine {
         }
     }
 
+    /** v1.4.27 P0.3：目录分页最多跟几页（与 JS 源 harvest 的 50 页同口径）。 */
+    const val MAX_TOC_PAGES = 50
+
+    /** 多页目录合并：按章节 URL 去重（保留先出现的），导航章过滤后重排下标。 */
+    internal fun dedupToc(list: List<ChapterMeta>): List<ChapterMeta> {
+        val seen = HashSet<String>()
+        return list.filter { seen.add(it.url) }
+            .filterNot { NovelStore.isNavChapterTitle(it.title) }
+            .mapIndexed { i, m -> m.copy(index = i) }
+    }
+
     /** v0.250.0：非 JS 正文提取（规则 + 替换 + 通用兜底），首抓与验证重抓共用。 */
     private fun extractChapterText(source: BookSource, html: String, pageUrl: String): String {
         // v1.2.28：JSON 路径正文规则（对标阅读 AnalyzeRule.getString）：
@@ -910,7 +1074,8 @@ object NovelSourceEngine {
             val text = extractChapterText(source, page.body, page.url)
             if (text.isNotBlank()) return ContentResult.Ok(text)
             // 200 但提空：只有疑似验证页才走验证，普通规则不匹配不反复开验证。
-            if (!VerifyGate.looksLikeChallenge(page.body)) return ContentResult.Failed(ContentFail.PARSE_EMPTY)
+            // v1.4.27 解缠⑨：特征词统一在 VerifyPolicy；命中才走“先后台、后前台”。
+            if (!VerifyPolicy.looksLikeChallenge(page.body)) return ContentResult.Failed(ContentFail.PARSE_EMPTY)
             if (!allowGate) return ContentResult.Failed(ContentFail.VERIFY)
             LogBus.w(TAG, "正文 ${source.name} 首抓 200 但疑似验证页，进验证")
             var refetched = false
@@ -1197,12 +1362,18 @@ object NovelSourceEngine {
      * v0.201.0：发现页——按分类 URL 抓一页，返回书目。
      * 规则取 ruleExplore，缺失项回落到 ruleSearch（源只有 exploreUrl 没写
      * ruleExplore 时也能用）；分类 URL 支持 {{page}} 模板与相对地址（按源地址补全）。
+     * v1.4.26：分类 URL 先按模板求值（offset={{(page-1)*100}} 这类算式按页码展开，
+     * 之前是原样发过去、靠服务端容忍才回第一页）；响应体是 JSON 时走 JSON 解析
+     *（API 源的发现列表，规则与搜索的 JSON 分支同款），非 JSON 体保持 CSS 路径不动。
      */
     suspend fun explore(source: BookSource, categoryUrl: String, page: Int, allowGate: Boolean = false): List<NovelSearchResult> {
         applySourceNetConfig(source)
         if (source.exploreUrl.isBlank()) return emptyList()
         return withContext(Dispatchers.IO) {
-            val url = resolveUrl(source.url, categoryUrl.replace("{{page}}", page.toString()))
+            val url = evalCategoryUrl(source, categoryUrl, page) ?: run {
+                LogBus.w(TAG, "发现地址模板求值失败 ${source.name}，跳过本次发现")
+                return@withContext emptyList()
+            }
             val ua = uaOf(source)
             val first = gatedFetch(source, ua, url, allowGate) {
                 BookRuleEngine.fetchPageOutcome(url, ua, options = fetchOptions(source))
@@ -1218,6 +1389,13 @@ object NovelSourceEngine {
             val authorRule = source.ruleExploreAuthor.ifBlank { source.ruleSearchAuthor }
             val bookUrlRule = source.ruleExploreBookUrl.ifBlank { source.ruleSearchBookUrl.ifBlank { "a@href" } }
             val coverRule = source.ruleExploreCover.ifBlank { source.ruleSearchCover }
+            // v1.4.26：JSON 发现列表（API 源）走 JSON 解析，不走 CSS
+            if (LegadoJsEngine.parseJson(checked.body) != null) {
+                return@withContext exploreJsonItems(
+                    checked.body, checked.url, source, ctx, state,
+                    listRule, nameRule, authorRule, bookUrlRule, coverRule,
+                )
+            }
             LegadoJsEngine.evalListRule(checked.body, checked.url, listRule, ctx, state).mapNotNull { el ->
                 val name = LegadoJsEngine.evalTextRule(el, checked.url, nameRule, ctx, state)
                 val bookUrl = LegadoJsEngine.evalTextRule(el, checked.url, bookUrlRule, ctx, state)
@@ -1233,9 +1411,89 @@ object NovelSourceEngine {
         }
     }
 
-    /** v0.210.0：发现页原网页直渲用：分类 URL 补成完整地址（第 1 页）。 */
+    /**
+     * v1.4.26：JSON 发现列表的结果映射（与 searchJsonItems 同款，规则取 ruleExplore
+     * 的回落链，由调用方按“ruleExplore 缺失回落 ruleSearch”算好传进来）。
+     * 条目是 JSON 对象，字段规则走 evalJsonField（`$.` 取值 / 裸键 / `{{$.x}}` 模板
+     * / `@js:` 拼接 / `##` 去标签）；组内按 remoteId 去重。
+     */
+    private fun exploreJsonItems(
+        body: String,
+        pageUrl: String,
+        source: BookSource,
+        ctx: LegadoJsEngine.JsCtx,
+        state: LegadoJsEngine.JsState,
+        listRule: String,
+        nameRule: String,
+        authorRule: String,
+        bookUrlRule: String,
+        coverRule: String,
+    ): List<NovelSearchResult> {
+        val items = LegadoJsEngine.evalJsonListRule(body, listRule, ctx, state)
+        return items.mapNotNull { item ->
+            val name = LegadoJsEngine.evalJsonField(item, nameRule, ctx, state)
+            val bookUrl = LegadoJsEngine.evalJsonField(item, bookUrlRule, ctx, state)
+            if (name.isBlank() || bookUrl.isBlank()) return@mapNotNull null
+            NovelSearchResult(
+                sourceKey = source.key,
+                remoteId = absUrl(pageUrl, bookUrl),
+                title = name,
+                author = LegadoJsEngine.evalJsonField(item, authorRule, ctx, state).ifBlank { null },
+                cover = LegadoJsEngine.evalJsonField(item, coverRule, ctx, state).ifBlank { null },
+            )
+        }.distinctBy { it.remoteId }
+    }
+
+    /**
+     * v1.4.26：分类 URL 求值（`{{page}}` / `{{(page-1)*100}}` 等模板块按页码展开，
+     * 再按源地址补全相对地址），发现页请求与探测回落共用。求值失败返回 null。
+     */
+    fun evalCategoryUrl(source: BookSource, categoryUrl: String, page: Int): String? {
+        val state = LegadoJsEngine.JsState(source.key)
+        val ctx = LegadoJsEngine.JsCtx(source = source.toJsRuleSource(), baseUrl = source.url, page = page)
+        val evaluated = evalUrlTemplateBlocks(categoryUrl, ctx, state) ?: return null
+        return resolveUrl(source.url, evaluated)
+    }
+
+    /**
+     * v1.4.26：URL 里的 `{{...}}` 模板块求值（与搜索地址 evalSearchUrl 第 2 步同款，
+     * 只是这里没有 `{{key}}`、page 直接绑进 JsCtx 走 JS 求值：`{{page}}` 得页码、
+     * `{{(page-1)*100}}` 在 page=1 时得 0、page=2 时得 100）。无模板块时原样返回；
+     * 任一块求值失败返回 null（调用方跳过，不把未展开的模板原样发出去）。
+     */
+    private fun evalUrlTemplateBlocks(
+        template: String,
+        ctx: LegadoJsEngine.JsCtx,
+        state: LegadoJsEngine.JsState,
+    ): String? {
+        if (!template.contains("{{")) return template
+        var failed = false
+        val out = Regex("\\{\\{([^{}]+)\\}\\}").replace(template) { m ->
+            val inner = m.groupValues[1].trim()
+            val r = LegadoJsEngine.evalScript(
+                inner,
+                LegadoJsEngine.bindings(ctx, state, result = "", src = ""),
+                LegadoJsEngine.jsLibPrelude(ctx.source),
+            )
+            if (r == null) {
+                failed = true
+                ""
+            } else {
+                // 数字结果去 .0（{{(page-1)*100}} 在 page=2 时得 "100" 不是 "100.0"）
+                formatJsTemplateValue(r)
+            }
+        }
+        return if (failed) null else out
+    }
+
+    /**
+     * v0.210.0：发现页原网页直渲用：分类 URL 补成完整地址（第 1 页）。
+     * v1.4.26 修（智能体推前审稿）：WebView 默认视图的分类地址同样走模板求值
+     *（page=1，offset={{(page-1)*100}} 求值成 0），求值失败回落旧的 {{page}}→"1" 替换。
+     */
     fun explorePageUrl(source: BookSource, categoryUrl: String): String =
-        resolveUrl(source.url, categoryUrl.replace("{{page}}", "1"))
+        evalCategoryUrl(source, categoryUrl, 1)
+            ?: resolveUrl(source.url, categoryUrl.replace("{{page}}", "1"))
 
     /** 相对地址按源地址补全（源地址尾斜杠与分类地址首斜杠不重复）。 */
     private fun resolveUrl(base: String, url: String): String {
@@ -1279,11 +1537,11 @@ object NovelSourceEngine {
         }.getOrDefault(emptyList())
     }
 
-    // ---------------- v0.64.0 本地 PY 书源链路 ----------------
-    // PY 书源的 NovelSearchResult.sourceKey 为 "pybook:<文件名>"，
-    // 凭此外缀找到规则文件，走 PyBookApi 调 bookSearch/bookDetail/bookChapter。
-
-    private val pyBookApi = PyBookApi()
+    // ---------------- 引擎路由（JSON / PY） ----------------
+    // v1.4.27 解缠①：PY 书源链路（searchPy/chaptersPy/contentPy/bookDetailPy 与
+    // pyBookApi、pyRulePath）整体搬进 PyNovelEngine（伴生对象，签名不动）；
+    // 本对象只留 JSON 路径、多源聚合（searchAll/searchAllFlow/searchAllPy）与路由。
+    // 新代码一律经 novelEngineFor / novelEngineForKey 拿 NovelEngine，不直调本对象的单源函数。
 
     /** v1.1.6 分层第 2 批：JSON 书源的 NovelEngine（绑站适配器）。
      * v1.1.10：构造带 Context——段评 sidecar 缓存要落 filesDir。 */
@@ -1305,50 +1563,6 @@ object NovelSourceEngine {
         }
     }
 
-    /** 拉 PY 书源的详情（名/作者/简介/封面），供 PyNovelEngine.bookDetail。 */
-    suspend fun bookDetailPy(context: Context, book: NovelSearchResult): BookDetailInfo {
-        val path = pyRulePath(context, book) ?: return BookDetailInfo()
-        return runCatching { pyBookApi.detail(path, book.remoteId) }
-            .onFailure {
-                if (it is CancellationException) throw it
-                LogBus.w(TAG, "PY 书源详情失败 ${book.sourceKey}: ${it.message}")
-            }
-            .getOrNull()
-            ?.let {
-                BookDetailInfo(
-                    name = it.name,
-                    author = it.author.orEmpty(),
-                    intro = it.intro,
-                    cover = it.cover.orEmpty(),
-                )
-            }
-            ?: BookDetailInfo()
-    }
-
-    private fun pyRulePath(context: Context, book: NovelSearchResult): String? {
-        val name = PyBookSourceManager.fileNameOf(book.sourceKey) ?: return null
-        return PyBookSourceManager.rulePath(context, name)
-    }
-
-    /** 在单个 PY 书源里搜书。 */
-    suspend fun searchPy(
-        context: Context,
-        rule: PyBookSourceManager.PyBookRule,
-        keyword: String,
-    ): List<NovelSearchResult> {
-        val path = PyBookSourceManager.rulePath(context, rule.name) ?: return emptyList()
-        return runCatching { pyBookApi.search(path, keyword) }
-            .onFailure {
-                // v0.247.0（取消语义）：同 searchAll，取消原样抛出。
-                if (it is CancellationException) throw it
-                // v1.1.12：记一笔失败，搜书页据此区分“真没书”和“搜失败了”。
-                failedSearchNames.add(rule.name)
-                LogBus.w(TAG, "PY 书源搜索失败 ${rule.name}: ${it.message}")
-            }
-            .getOrDefault(emptyList())
-            .map { it.copy(sourceKey = PyBookSourceManager.SOURCE_KEY_PREFIX + rule.name) }
-    }
-
     /** 多个 PY 书源并发搜，结果按源分组返回。v0.101.0：Semaphore(4) 限流防反爬封 IP。 */
     suspend fun searchAllPy(
         context: Context,
@@ -1356,7 +1570,7 @@ object NovelSourceEngine {
         keyword: String,
     ): List<Pair<PyBookSourceManager.PyBookRule, List<NovelSearchResult>>> = coroutineScope {
         rules.map { r ->
-            async { r to searchSemaphore.withPermit { searchPy(context, r, keyword) } }
+            async { r to searchSemaphore.withPermit { PyNovelEngine.searchPy(context, r, keyword) } }
         }.awaitAll()
     }
 
@@ -1367,35 +1581,6 @@ object NovelSourceEngine {
      */
     suspend fun <T> withSearchThrottle(block: suspend () -> T): T =
         searchSemaphore.withPermit { block() }
-
-    /** 拉 PY 书源的目录。 */
-    suspend fun chaptersPy(context: Context, book: NovelSearchResult): List<ChapterMeta> {
-        val path = pyRulePath(context, book) ?: return emptyList()
-        return runCatching { pyBookApi.detail(path, book.remoteId)?.chapters.orEmpty() }
-            .onFailure {
-                // v0.247.0（取消语义）：同 searchAll，取消原样抛出。
-                if (it is CancellationException) throw it
-                LogBus.w(TAG, "PY 书源目录失败 ${book.sourceKey}: ${it.message}")
-            }
-            .getOrDefault(emptyList())
-            // v0.194.0：导航章兜底过滤（见 NovelStore.isNavChapterTitle）。
-            .filterNot { NovelStore.isNavChapterTitle(it.title) }
-            .mapIndexed { i, m -> m.copy(index = i) }
-    }
-
-    /** 拉 PY 书源的单章正文。 */
-    suspend fun contentPy(context: Context, chapter: ChapterMeta, sourceKey: String): String {
-        val name = PyBookSourceManager.fileNameOf(sourceKey) ?: return ""
-        val path = PyBookSourceManager.rulePath(context, name) ?: return ""
-        if (chapter.url.isBlank()) return ""
-        return runCatching { pyBookApi.chapter(path, chapter.url) }
-            .onFailure {
-                // v0.247.0（取消语义）：同 searchAll，取消原样抛出。
-                if (it is CancellationException) throw it
-                LogBus.w(TAG, "PY 书源正文失败 $sourceKey: ${it.message}")
-            }
-            .getOrDefault("")
-    }
 
     /** v0.294.55：JS/链规则算出的相对 bookUrl（如 /b/123.html）按页面地址补全，
      * 否则 fetchPage 拿相对地址请求必失败，详情/目录打不开。 */

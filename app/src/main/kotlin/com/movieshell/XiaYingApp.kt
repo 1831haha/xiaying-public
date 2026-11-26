@@ -95,6 +95,8 @@ class XiaYingApp : Application() {
         LegadoJsEngine.SourceVariableStore.init(filesDir)
         // v1.1.6：JS 引擎的验证通道接 VerifyGate（core/js 不直接依赖数据层）；
         // Cookie 落盘读回（登录一次，杀进程重启后仍是登录态）。
+        // v1.4.27 解缠⑨（为什么只走前台）：这是书源 JS 主动调 startBrowserAwait 要开浏览器
+        //（登录/验证码等需要用户看页面的场景），后台自动判过没有意义，直接弹前台；超时同 VerifyPolicy。
         LegadoJsEngine.onVerifyRequested = { url, title, ua ->
             VerifyGate.awaitVerify(url, title, ua)?.let {
                 LegadoJsEngine.JsVerifyResult(it.html, it.url, it.cookieHeader)

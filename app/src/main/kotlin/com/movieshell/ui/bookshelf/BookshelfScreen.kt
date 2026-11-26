@@ -1,5 +1,12 @@
 package com.movieshell.ui.bookshelf
 
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import com.movieshell.ui.novel.GlassIconButton
+import com.movieshell.ui.novel.GlassMenu
+import com.movieshell.ui.novel.GlassMenuItem
+import com.movieshell.ui.novel.NovelTokens
+import com.movieshell.ui.novel.SlimGlassBar
+import androidx.compose.material.icons.filled.Tune
 import com.movieshell.core.util.SafeFileName
 import com.movieshell.ui.components.AppSearchBar
 import androidx.compose.material.icons.outlined.UploadFile
@@ -56,7 +63,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterAlt
-import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
@@ -102,7 +108,6 @@ import com.movieshell.domain.model.Novel
 import com.movieshell.domain.model.ReadingProgress
 import com.movieshell.data.novel.BookSourceManager
 import com.movieshell.data.novel.NovelSourceEngine
-import com.movieshell.data.novel.NovelUpdateChecker
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.novel.TxtImporter
 import com.movieshell.data.store.BookGroup
@@ -123,11 +128,7 @@ import com.movieshell.ui.theme.LocalBrandGradient
 import com.movieshell.ui.preview.shareFile
 import java.io.File
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -164,80 +165,56 @@ fun BookshelfScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var books by remember { mutableStateOf<List<Novel>>(emptyList()) }
-    var progressMap by remember { mutableStateOf<Map<String, ReadingProgress>>(emptyMap()) }
-    var updates by remember { mutableStateOf<Map<String, NovelUpdateInfo>>(emptyMap()) }
-    var customGroups by remember { mutableStateOf<List<BookGroup>>(emptyList()) }
-    var importing by remember { mutableStateOf(false) }
-    var checking by remember { mutableStateOf(false) }
+    // v1.4.27 解缠⑦：书架状态搬进 BookshelfViewModel（只搬状态，界面不动）——
+    // 下面各 var 原名原用法，直接委托到 VM 属性；进入书架时复位原 remember 状态。
+    val vm: BookshelfViewModel = viewModel()
+    remember(vm) { vm.onScreenEnter(); true }
+    var books by vm::books
+    var progressMap by vm::progressMap
+    var updates by vm::updates
+    var customGroups by vm::customGroups
+    var importing by vm::importing
+    var checking by vm::checking
     // v0.211.0：下拉刷新逐本状态——正在查的书 id 集合，查完一本摘一本；
     // 本地 TXT 不联网，永不进这个集合、不转圈。
-    var checkingIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var checkingIds by vm::checkingIds
 
     // v0.98.0：视图/排序/分组偏好
-    var viewMode by remember { mutableStateOf(BookshelfGroupStore.viewMode(context)) }
-    var sortMode by remember { mutableStateOf(BookshelfGroupStore.sortMode(context)) }
-    var selectedGroup by remember { mutableStateOf(BookshelfGroupStore.selectedGroup(context)) }
+    var viewMode by vm::viewMode
+    var sortMode by vm::sortMode
+    var selectedGroup by vm::selectedGroup
 
     // v0.197.0：阅读式页签（全部 / 更新失败）+ 上次检查失败的书 id（持久化在 prefs）
-    // v0.294.5：页签与找书态改 rememberSaveable——进书详情/阅读再返回不丢
-    var shelfTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(0) }
-    var failedIds by remember { mutableStateOf(BookshelfGroupStore.failedIds(context)) }
+    // v0.294.5：页签与找书态原为 rememberSaveable——v1.4.27 落 VM 的 SavedStateHandle，进书详情/阅读再返回不丢
+    var shelfTab by vm::shelfTab
+    var failedIds by vm::failedIds
 
     // v0.98.0：多选模式
-    var selectionMode by remember { mutableStateOf(false) }
-    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectionMode by vm::selectionMode
+    var selectedIds by vm::selectedIds
     // v0.215.0：批量换源弹窗与进行态
-    var showBatchSource by remember { mutableStateOf(false) }
-    var batchSwitching by remember { mutableStateOf(false) }
+    var showBatchSource by vm::showBatchSource
+    var batchSwitching by vm::batchSwitching
     val batchJsonSources by com.movieshell.data.novel.BookSourceManager.sources.collectAsState()
     val batchPyRules by com.movieshell.data.novel.PyBookSourceManager.rules.collectAsState()
     val batchPyEnabled by com.movieshell.data.novel.PyBookSourceManager.enabled.collectAsState()
 
     // v0.195.0：书架内直接搜（不用单独找书页）
-    var searching by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var searching by vm::searching
     // v0.243.0：找书态按系统返回先回书架——找书只是书架内的一个状态、
     // 不是导航路由，不拦截时返回会直接 pop 书架路由落到首页；与“取消”同义。
     BackHandler(enabled = searching) { searching = false }
 
     // 弹窗状态
-    var deleteTarget by remember { mutableStateOf<Novel?>(null) }
-    var batchDelete by remember { mutableStateOf(false) }
-    var detailTarget by remember { mutableStateOf<Novel?>(null) }
-    var groupPickerFor by remember { mutableStateOf<List<String>?>(null) }
-    var showCreateGroup by remember { mutableStateOf(false) }
-    var renameTarget by remember { mutableStateOf<BookGroup?>(null) }
-    var groupMenuTarget by remember { mutableStateOf<BookGroup?>(null) }
+    var deleteTarget by vm::deleteTarget
+    var batchDelete by vm::batchDelete
+    var detailTarget by vm::detailTarget
+    var groupPickerFor by vm::groupPickerFor
+    var showCreateGroup by vm::showCreateGroup
+    var renameTarget by vm::renameTarget
+    var groupMenuTarget by vm::groupMenuTarget
 
-    fun reload() {
-        scope.launch {
-            val all = withContext(Dispatchers.IO) { NovelStore.list(context) }
-            // v0.270.0（T19）：进度一次读全表，不再逐本各读一遍文件——
-            // ReadingProgressStore.load() 内部本就是全表读，逐本调是 N 次全表解析；
-            // loadAll 的语义与逐本 load + 缺省值完全一致（缺进度给空进度）。
-            val allProgress = withContext(Dispatchers.IO) { ReadingProgressStore.loadAll(context) }
-            val pm = all.associate { novel ->
-                novel.id to (allProgress[novel.id] ?: ReadingProgress(novelId = novel.id))
-            }
-            val ups = withContext(Dispatchers.IO) { NovelUpdateStore.getAll(context) }
-            val gs = withContext(Dispatchers.IO) { BookshelfGroupStore.list(context) }
-            progressMap = pm
-            updates = ups
-            customGroups = gs
-            // 分组被删了就回全部（v0.179.0：智能分组已去掉，
-            // 以前选过在读/养肥/已读完的也回全部）
-            val validIds = setOf(
-                BookshelfGroupStore.GROUP_ALL,
-            ) + gs.map { it.id }
-            if (selectedGroup !in validIds) {
-                selectedGroup = BookshelfGroupStore.GROUP_ALL
-                BookshelfGroupStore.setSelectedGroup(context, selectedGroup)
-            }
-            books = all
-            // 删书后多选集合里可能残留不存在的 id，顺手清理
-            selectedIds = selectedIds.filter { id -> all.any { it.id == id } }.toSet()
-        }
-    }
+    fun reload() = vm.reload()
     LaunchedEffect(Unit) {
         reload()
         // v0.249.0：后台补取完成即重读，行状态（LOADING→READY/FAILED）实时跟上。
@@ -293,106 +270,10 @@ fun BookshelfScreen(
         }
     }
 
-    // v0.215.0：批量换源执行——本地 TXT 跳过（没有源可换），逐本走限流，
-    // 搜不到或目录拉取失败的那本不动，最后统一报成功／失败本数。
-    fun runBatchSwitch(targetKey: String) {
-        val targets = books.filter { selectedIds.contains(it.id) && it.sourceKey != "local" }
-        scope.launch {
-            withContext(Dispatchers.IO) {
-                com.movieshell.data.novel.BookSourceManager.load(context)
-                com.movieshell.data.novel.PyBookSourceManager.load(context)
-            }
-            var ok = 0
-            var fail = 0
-            for (n in targets) {
-                val done = NovelSourceEngine.withSearchThrottle {
-                    NovelUpdateChecker.switchToSource(context, n, targetKey)
-                }
-                if (done) ok++ else fail++
-            }
-            batchSwitching = false
-            showBatchSource = false
-            selectionMode = false
-            selectedIds = emptySet()
-            PluginUi.toast(context, "批量换源完成：成功 $ok 本，失败 $fail 本")
-            reload()
-        }
-    }
-
-    // v0.217.0（F40）：逐本回写的互斥锁——每本查完的回调里都有“读 failedIds／
-    // updates → 改 → 写盘”三步，并发回调互相覆盖，失败态会丢；
-    // 锁把每本的回写串行化，逐本随查随写盘的好处（中途退出不丢）保留。
-    val checkWriteMutex = remember { Mutex() }
-
-    // v0.84.0：检查全部在线书的更新（本地 TXT 跳过）。
-    // v0.211.0：逐本状态——原来 checkAllDetailed 只在全部跑完才回结果，
-    // 刷新时每本书后面没有自己的状态，只剩顶部一行“正在检查更新…”。
-    // 改成每本书一个 async，查完立刻把自己从 checkingIds 摘掉：
-    // 圈圈还在转 = 这本还没查完；圈圈停了 + 数字角标 = 有更新；
-    // 圈圈停了 + 红色“失败” = 这本没查到。写盘也在逐本回调里
-    // 随查随做（NovelUpdateStore 自带锁串行化，不怕互相覆盖）。
-    fun checkUpdates() {
-        if (checking) return
-        checking = true
-        scope.launch {
-            withContext(Dispatchers.IO) {
-                BookSourceManager.load(context)
-                PyBookSourceManager.load(context)
-            }
-            val online = books.filter { it.sourceKey != "local" && it.updateEnabled }
-            checkingIds = online.map { it.id }.toSet()
-            val results = online.map { novel ->
-                async {
-                    // v0.211.0 回归修复（流程审计 H2）：逐本 async 时丢了
-                    // checkAllDetailed 里包的 Semaphore(4) 限流，几百本书会
-                    // 齐发搜索+拉目录重蹈 v0.109 前被反爬封 IP 的覆辙；逐本
-                    // 完成回调里包一层 withSearchThrottle，限流和逐本状态兼得。
-                    val r = NovelSourceEngine.withSearchThrottle {
-                        NovelUpdateChecker.check(context, novel)
-                    }
-                    // 回写段整体加锁：读-改-写三步不可被另一本的回调插进来。
-                    checkWriteMutex.withLock {
-                        checkingIds = checkingIds - novel.id
-                        when (r) {
-                            is NovelUpdateChecker.Result.Updated -> {
-                                val total = (updates[novel.id]?.newChapters ?: 0) + r.newCount
-                                updates = updates + (novel.id to NovelUpdateInfo(novel.id, total, System.currentTimeMillis()))
-                                failedIds = failedIds - novel.id
-                                NovelUpdateStore.set(context, novel.id, r.newCount)
-                                BookshelfGroupStore.setFailedIds(context, failedIds)
-                            }
-                            is NovelUpdateChecker.Result.Failed -> {
-                                failedIds = failedIds + novel.id
-                                BookshelfGroupStore.setFailedIds(context, failedIds)
-                            }
-                            else -> {
-                                failedIds = failedIds - novel.id
-                                BookshelfGroupStore.setFailedIds(context, failedIds)
-                            }
-                        }
-                    }
-                    novel.id to r
-                }
-            }.awaitAll()
-            val result = results.mapNotNull { (id, r) ->
-                (r as? NovelUpdateChecker.Result.Updated)?.let { id to it.newCount }
-            }.toMap()
-            val failed = results.count { (_, r) -> r is NovelUpdateChecker.Result.Failed }
-            // 角标与失败态已在逐本回调里随查随写盘，这里不再批量重写
-            // （批量重写会把中途已写盘的结果再覆盖一遍，还丢累加语义）。
-            checking = false
-            checkingIds = emptySet()
-            reload()
-            PluginUi.toast(context,
-                when {
-                    result.isNotEmpty() -> "${result.size} 本有更新"
-                    online.isNotEmpty() && failed == online.size -> "检查失败，稍后再试"
-                    failed > 0 -> "已检查，$failed 本检查失败"
-                    else -> "都追上了，没有新章节"
-                },
-            )
-        }
-    }
+    // v1.4.27 Step 3：两个联网长操作（批量换源、检查更新）搬进 BookshelfViewModel（viewModelScope）——
+    // 检查中进阅读器/书详情再返回，任务不再被组合销毁取消、逐本结果照常回写（行为变化见 README）。
+    fun runBatchSwitch(targetKey: String) = vm.runBatchSwitch(targetKey)
+    fun checkUpdates() = vm.checkUpdates()
 
     fun openNovel(novel: Novel) {
         // v0.249.0：目录未到不进空阅读页——LOADING 只提示，FAILED 点一次即重试。
@@ -471,38 +352,15 @@ fun BookshelfScreen(
 
     // ---------------- 数据计算 ----------------
 
-    data class ShelfGroup(val id: String, val name: String, val count: Int)
-
-    // v0.179.0：只留全部（放最前面）+ 自定义分组，智能分组已删。
+    // v1.4.27 解缠⑦：分组计数与筛选排序提成 BookshelfViewModel 的纯函数（逐字等价）。
     val shelfGroups = remember(books, customGroups) {
-        listOf(
-            ShelfGroup(BookshelfGroupStore.GROUP_ALL, "全部", books.size),
-        ) + customGroups.map { g ->
-            ShelfGroup(g.id, g.name, books.count { g.novelIds.contains(it.id) })
-        }
+        BookshelfViewModel.shelfGroups(books, customGroups)
     }
 
     val visibleBooks = remember(books, selectedGroup, sortMode, progressMap, updates, customGroups, shelfTab, failedIds) {
-        // v0.197.0：更新失败页签只列上次检查失败的书（不看分组）；全部页签沿用分组筛选
-        val preFiltered = if (shelfTab == 1) books.filter { it.id in failedIds } else books
-        val filtered = if (shelfTab == 1) preFiltered else when (selectedGroup) {
-            BookshelfGroupStore.GROUP_ALL -> preFiltered
-            else -> {
-                val ids = customGroups.find { it.id == selectedGroup }?.novelIds?.toSet()
-                    ?: emptySet()
-                preFiltered.filter { it.id in ids }
-            }
-        }
-        when (sortMode) {
-            BookshelfGroupStore.SORT_UPDATED ->
-                filtered.sortedWith(
-                    compareByDescending<Novel> { updates[it.id]?.checkedAt ?: 0L }
-                        .thenByDescending { progressMap[it.id]?.updatedAt ?: 0L },
-                )
-            BookshelfGroupStore.SORT_TITLE -> filtered.sortedBy { it.title }
-            BookshelfGroupStore.SORT_PROGRESS -> filtered.sortedByDescending { it.readFraction() }
-            else -> filtered.sortedByDescending { progressMap[it.id]?.updatedAt ?: 0L }
-        }
+        BookshelfViewModel.visibleBooks(
+            books, selectedGroup, sortMode, progressMap, updates, customGroups, shelfTab, failedIds,
+        )
     }
 
     // v0.239.0：继续读 Hero 已撤——刚读过的书不再放大领头（用户原话“太丑了”），
@@ -665,88 +523,82 @@ fun BookshelfScreen(
             // v1.2.27：发现页签已并进书源管理。
             // v0.251.0：顶栏合并——第 2 行工具栏拿掉，本数＋新建分组＋视图切换收进本行右侧；
             // 排序与更新失败筛选收进更多菜单，功能不丢；窄屏（<360dp）仍藏本数。
-            Row(
-                modifier = Modifier
-                    .v5Bleed(V5.Gutter)
-                    .height(46.dp)
-                    .v5BottomDivider(MaterialTheme.colorScheme.outlineVariant)
-                    .padding(start = V5.Gutter, end = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxHeight(),
-                    verticalAlignment = Alignment.CenterVertically,
+            // v1.4.27 Step 4：顶栏换 SlimGlassBar（f5bb9b44：48dp 玻璃条、无返回、标题「我的书架」15sp、
+            // 右侧搜索＋更多；顶栏下方 12dp）。原顶栏的导入/排序/视图切换/本数收进「更多」菜单，功能不丢。
+            // 多选模式时上面的“已选 N 本”操作栏照旧，本栏不显示。
+            if (!selectionMode) {
+                Spacer(Modifier.height(8.dp))
+                SlimGlassBar(
+                    title = "我的书架",
+                    modifier = Modifier.v5Bleed(V5.Gutter),
                 ) {
-                    // v1.2.27：发现页签已并进书源管理，书架只剩一个标题（样式与原来选中态一致）。
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxHeight(),
-                    ) {
-                        Text(
-                            "书架",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .width(30.dp)
-                                .height(2.dp)
-                                .clip(RoundedCornerShape(1.dp))
-                                .background(MaterialTheme.colorScheme.primary),
-                        )
-                    }
-                }
-                val narrowHeader = LocalConfiguration.current.screenWidthDp < 380
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!narrowHeader) {
-                        Text(
-                            "${visibleBooks.size} 本",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    // v0.294.6：顶栏动作统一 36dp 无底色图标钮——导入 / 排序 / 视图 / 找书 / 更多；
-                    // 新建分组收进「更多」菜单（功能不丢）。
-                    IconButton(
-                        onClick = { if (!importing) pickTxt.launch("text/plain") },
-                        enabled = !importing,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            Icons.Outlined.UploadFile,
-                            contentDescription = "导入本地书籍",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
+                    GlassIconButton(Icons.Filled.Search, "找书", onClick = { searching = true })
+                    Spacer(Modifier.width(NovelTokens.BarActionGap))
                     Box {
-                        IconButton(onClick = { showSortMenu = true }, modifier = Modifier.size(36.dp)) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Sort,
-                                contentDescription = "排序",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp),
+                        GlassIconButton(Icons.Filled.MoreVert, "更多", onClick = { showTopMenu = true })
+                        GlassMenu(
+                            expanded = showTopMenu,
+                            onDismissRequest = { showTopMenu = false },
+                        ) {
+                            GlassMenuItem(Icons.Outlined.UploadFile, if (importing) "导入中…" else "添加本地书籍", onClick = {
+                                showTopMenu = false
+                                if (!importing) pickTxt.launch("text/plain")
+                            })
+                            GlassMenuItem(
+                                Icons.AutoMirrored.Filled.Sort, "排序",
+                                trailing = sortNames.getOrNull(sortMode),
+                                onClick = {
+                                    showTopMenu = false
+                                    showSortMenu = true
+                                },
                             )
+                            GlassMenuItem(
+                                if (viewMode == BookshelfGroupStore.VIEW_LIST) Icons.Filled.GridView
+                                else Icons.AutoMirrored.Filled.FormatListBulleted,
+                                "书架布局",
+                                trailing = if (viewMode == BookshelfGroupStore.VIEW_LIST) "列表" else "网格",
+                                onClick = {
+                                    showTopMenu = false
+                                    viewMode = if (viewMode == BookshelfGroupStore.VIEW_LIST)
+                                        BookshelfGroupStore.VIEW_GRID else BookshelfGroupStore.VIEW_LIST
+                                    BookshelfGroupStore.setViewMode(context, viewMode)
+                                },
+                            )
+                            GlassMenuItem(Icons.Filled.Checklist, "书架管理", trailing = "${visibleBooks.size} 本", onClick = {
+                                showTopMenu = false
+                                selectionMode = true
+                            })
+                            GlassMenuItem(Icons.Filled.Add, "新建分组", onClick = {
+                                showTopMenu = false
+                                showCreateGroup = true
+                            })
+                            GlassMenuItem(
+                                Icons.Filled.FilterAlt,
+                                if (failedIds.isNotEmpty()) "筛选：更新失败(${failedIds.size})" else "筛选：更新失败",
+                                trailing = if (shelfTab == 1) "开" else null,
+                                onClick = {
+                                    showTopMenu = false
+                                    shelfTab = if (shelfTab == 1) 0 else 1
+                                },
+                            )
+                            GlassMenuItem(Icons.Filled.Tune, "净化规则", onClick = {
+                                showTopMenu = false
+                                onOpenPurifyRules()
+                            })
+                            GlassMenuItem(Icons.Filled.Storage, "书源管理", onClick = {
+                                showTopMenu = false
+                                onManageSourcesClick()
+                            })
                         }
-                        AppDropdownMenu(
+                        // 排序二级菜单：从「更多 → 排序」打开，锚在同一按钮下
+                        GlassMenu(
                             expanded = showSortMenu,
                             onDismissRequest = { showSortMenu = false },
                         ) {
                             sortNames.forEachIndexed { i, name ->
-                                DropdownMenuItem(
-                                    text = { Text(name) },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Filled.Check,
-                                            contentDescription = null,
-                                            tint = if (sortMode == i) MaterialTheme.colorScheme.primary
-                                            else Color.Transparent,
-                                        )
-                                    },
+                                GlassMenuItem(
+                                    Icons.AutoMirrored.Filled.Sort, name,
+                                    trailing = if (sortMode == i) "✓" else null,
                                     onClick = {
                                         showSortMenu = false
                                         sortMode = i
@@ -756,128 +608,9 @@ fun BookshelfScreen(
                             }
                         }
                     }
-                    IconButton(
-                        onClick = {
-                            viewMode = if (viewMode == BookshelfGroupStore.VIEW_LIST)
-                                BookshelfGroupStore.VIEW_GRID else BookshelfGroupStore.VIEW_LIST
-                            BookshelfGroupStore.setViewMode(context, viewMode)
-                        },
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            if (viewMode == BookshelfGroupStore.VIEW_LIST) Icons.Filled.GridView
-                            else Icons.Filled.FormatListBulleted,
-                            contentDescription = "切换视图",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    IconButton(onClick = { searching = true }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Filled.Search, "找书", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                    }
-                    Box {
-                        IconButton(onClick = { showTopMenu = true }, modifier = Modifier.size(36.dp)) {
-                            Icon(Icons.Filled.MoreVert, "更多", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                        }
-                        AppDropdownMenu(
-                            expanded = showTopMenu,
-                            onDismissRequest = { showTopMenu = false },
-                        ) {
-                            // v0.197.0：阅读式书架菜单（只留有真实功能的项；
-                            // 添加网址/远程书籍/缓存导出/导出导入书单/日志暂无对应功能，不摆空壳）
-                            // v0.251.0：更新目录挪给下拉刷新，菜单里换成净化规则入口。
-                            DropdownMenuItem(
-                                text = { Text("净化规则") },
-                                leadingIcon = {
-                                    Icon(Icons.Filled.FilterAlt, contentDescription = null)
-                                },
-                                onClick = {
-                                    showTopMenu = false
-                                    onOpenPurifyRules()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("添加本地书籍") },
-                                enabled = !importing,
-                                leadingIcon = {
-                                    Icon(Icons.Filled.Add, contentDescription = null)
-                                },
-                                onClick = {
-                                    showTopMenu = false
-                                    pickTxt.launch("text/plain")
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("书架管理") },
-                                leadingIcon = {
-                                    Icon(Icons.Filled.Checklist, contentDescription = null)
-                                },
-                                onClick = {
-                                    showTopMenu = false
-                                    selectionMode = true
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("书架布局") },
-                                leadingIcon = {
-                                    Icon(Icons.Filled.GridView, contentDescription = null)
-                                },
-                                onClick = {
-                                    showTopMenu = false
-                                    viewMode = if (viewMode == BookshelfGroupStore.VIEW_LIST)
-                                        BookshelfGroupStore.VIEW_GRID else BookshelfGroupStore.VIEW_LIST
-                                    BookshelfGroupStore.setViewMode(context, viewMode)
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("书源管理") },
-                                leadingIcon = {
-                                    Icon(Icons.Filled.Storage, contentDescription = null)
-                                },
-                                onClick = {
-                                    showTopMenu = false
-                                    onManageSourcesClick()
-                                },
-                            )
-                            // v0.251.0：顶栏拿掉的排序与更新失败筛选收进这里，功能不丢；
-                            // 未选中项用透明对勾占位，文字左对齐不错位。
-                            HorizontalDivider()
-                            // v0.294.6：排序挪到顶栏独立排序钮；这里补「新建分组」（原顶栏 + 号）。
-                            DropdownMenuItem(
-                                text = { Text("新建分组") },
-                                leadingIcon = {
-                                    Icon(Icons.Filled.Add, contentDescription = null)
-                                },
-                                onClick = {
-                                    showTopMenu = false
-                                    showCreateGroup = true
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (failedIds.isNotEmpty()) "筛选：更新失败(${failedIds.size})"
-                                        else "筛选：更新失败",
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Filled.Check,
-                                        contentDescription = null,
-                                        tint = if (shelfTab == 1) MaterialTheme.colorScheme.onSurface
-                                        else Color.Transparent,
-                                    )
-                                },
-                                onClick = {
-                                    showTopMenu = false
-                                    shelfTab = if (shelfTab == 1) 0 else 1
-                                },
-                            )
-                        }
-                    }
                 }
+                Spacer(Modifier.height(NovelTokens.BarBelowGap))
             }
-            Spacer(Modifier.height(8.dp))
         // v0.249.0：全部／更新失败不再占一整行页签，收进第 2 行工具栏的筛选菜单。
         // v0.196.0：搜索框上移到与“找书”同一行——框直接绑活动级搜索 VM
         // （与内嵌找书页同一份 keyword），回车即搜；VM 与焦点提到分支外，避免条件组合。
@@ -1023,9 +756,10 @@ fun BookshelfScreen(
                 }
             } else {
                 // v0.197.0：阅读式 plain 行自带底部分隔线，列表不再额外留 10dp 间距
+                // v1.4.27 Step 4：行卡 76dp、行间距 6dp（f5bb9b44 书架列表）。
                 LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(0.dp),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = dockClearance() + 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(ShelfRowTokens.Gap),
+                    contentPadding = PaddingValues(top = 0.dp, bottom = dockClearance() + 8.dp),
                 ) {
                     if (checking) {
                         item(key = "checking") { CheckingRow() }

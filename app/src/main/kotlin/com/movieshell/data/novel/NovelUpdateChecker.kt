@@ -94,7 +94,8 @@ object NovelUpdateChecker {
                 val hits = engine.search(novel.title, allowGate = true)
                 val best = pickBest(hits, novel.title, novel.author.orEmpty())
                     ?: return@runCatching false
-                val metas = engine.chapters(best)
+                // v1.4.27 解缠⑤：目录抓取统一走目录服务（现抓）。
+                val metas = NovelTocService.fetchChapters(engine, targetKey, best)
                 if (metas.isEmpty()) return@runCatching false
                 val chapters = metas.map {
                     Chapter(novelId = novel.id, index = it.index, title = it.title, url = it.url, commentUrl = it.commentUrl)
@@ -156,7 +157,7 @@ object NovelUpdateChecker {
         val engine = NovelSourceEngine.novelEngineForKey(context, novel.sourceKey) ?: return null
         val hits = engine.search(novel.title)
         val best = pickBest(hits, novel.title, novel.author.orEmpty()) ?: return null
-        return engine.chapters(best).ifEmpty { null }
+        return NovelTocService.fetchChapters(engine, novel.sourceKey, best).ifEmpty { null }
     }
 
     /** 选最像的一条：标题完全一致且作者对得上优先，其次标题完全一致，
