@@ -2,6 +2,7 @@ package com.movieshell.ui.novel
 
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.domain.model.BookSource
+import com.movieshell.domain.model.SourceHealth
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -86,5 +87,31 @@ class SourceRowTest {
         assertEquals(1, SourceRow.enabledPyCount(listOf(rules[1], rules[2]), enabled))
         assertEquals(2, SourceRow.enabledPyCount(rules, enabled))
         assertEquals(0, SourceRow.enabledPyCount(emptyList(), enabled))
+    }
+
+    // v1.4.29：统计区四格筛选口径——与 SourceStats.of 的计数口径一致。
+    @Test fun statFilterAllPassesEverything() {
+        assertTrue(StatFilter.ALL.matchesRow(false, false, SourceHealth.Fail))
+        assertTrue(StatFilter.ALL.matchesRow(true, false, SourceHealth.Untested))
+    }
+
+    @Test fun statFilterEnabledFollowsSwitch() {
+        assertTrue(StatFilter.ENABLED.matchesRow(false, true, SourceHealth.Fail))
+        assertTrue(StatFilter.ENABLED.matchesRow(true, true, SourceHealth.Untested))
+        assertFalse(StatFilter.ENABLED.matchesRow(false, false, SourceHealth.Ok(10)))
+        assertFalse(StatFilter.ENABLED.matchesRow(true, false, SourceHealth.Untested))
+    }
+
+    @Test fun statFilterFailedAndUnverifiedOnlyJson() {
+        assertTrue(StatFilter.FAILED.matchesRow(false, true, SourceHealth.Fail))
+        assertTrue(StatFilter.FAILED.matchesRow(false, true, SourceHealth.Timeout))
+        assertFalse(StatFilter.FAILED.matchesRow(false, true, SourceHealth.Ok(10)))
+        assertFalse(StatFilter.FAILED.matchesRow(false, true, SourceHealth.Unverified))
+        // PY 源无探测记录，永不进失效/未验证档。
+        assertFalse(StatFilter.FAILED.matchesRow(true, true, SourceHealth.Untested))
+        assertFalse(StatFilter.UNVERIFIED.matchesRow(true, true, SourceHealth.Untested))
+        assertTrue(StatFilter.UNVERIFIED.matchesRow(false, true, SourceHealth.Untested))
+        assertTrue(StatFilter.UNVERIFIED.matchesRow(false, true, SourceHealth.Unverified))
+        assertFalse(StatFilter.UNVERIFIED.matchesRow(false, true, SourceHealth.Fail))
     }
 }

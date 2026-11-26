@@ -90,9 +90,25 @@ data class SourceStats(val total: Int, val enabled: Int, val failed: Int, val un
     }
 }
 
-/** 统计信息区：48dp；数字 15sp、标签 10sp、重点数字（启用）绿色。 */
+/** v1.4.29：统计区筛选（纯函数，可单测）。PY 源无探测记录：失效/未验证只看 JSON。 */
+enum class StatFilter { ALL, ENABLED, FAILED, UNVERIFIED }
+
+/** 行是否落进当前统计筛选：health 是 JSON 源的探测档位，PY 行传 Untested 即可。 */
+fun StatFilter.matchesRow(isPy: Boolean, enabled: Boolean, health: SourceHealth): Boolean = when (this) {
+    StatFilter.ALL -> true
+    StatFilter.ENABLED -> enabled
+    StatFilter.FAILED -> !isPy && (health == SourceHealth.Fail || health == SourceHealth.Timeout)
+    StatFilter.UNVERIFIED -> !isPy && (health == SourceHealth.Untested || health == SourceHealth.Unverified)
+}
+
+/** 统计信息区：48dp；数字 15sp、标签 10sp、重点数字（启用）绿色；点一格按该档筛列表，再点回全部。 */
 @Composable
-fun SourceStatsStrip(stats: SourceStats, modifier: Modifier = Modifier) {
+fun SourceStatsStrip(
+    stats: SourceStats,
+    modifier: Modifier = Modifier,
+    selected: StatFilter = StatFilter.ALL,
+    onSelect: (StatFilter) -> Unit = {},
+) {
     val p = novelPalette()
     GlassSurface(
         modifier.fillMaxWidth().height(NovelTokens.StatsHeight),
@@ -101,19 +117,30 @@ fun SourceStatsStrip(stats: SourceStats, modifier: Modifier = Modifier) {
     ) {
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             val cells = listOf(
-                Triple("全部", stats.total, p.title),
-                Triple("启用", stats.enabled, p.success),
-                Triple("失效", stats.failed, if (stats.failed > 0) p.error else p.title),
-                Triple("未验证", stats.unverified, p.title),
+                Triple("全部", stats.total, p.title) to StatFilter.ALL,
+                Triple("启用", stats.enabled, p.success) to StatFilter.ENABLED,
+                Triple("失效", stats.failed, if (stats.failed > 0) p.error else p.title) to StatFilter.FAILED,
+                Triple("未验证", stats.unverified, p.title) to StatFilter.UNVERIFIED,
             )
-            cells.forEachIndexed { i, (label, n, color) ->
+            cells.forEachIndexed { i, (cell, filter) ->
+                val (label, n, color) = cell
                 if (i > 0) {
                     // 分隔竖线：描边色、高 18dp【自定】
                     Box(Modifier.width(1.dp).height(18.dp).background(p.glassStroke))
                 }
-                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("$n", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = color, maxLines = 1)
-                    Text(label, fontSize = 10.sp, color = p.hint, maxLines = 1)
+                val isSel = filter == selected
+                Column(
+                    Modifier.weight(1f)
+                        .fillMaxHeight()
+                        .novelClickable(kind = NovelMotion.Press.SMALL, onClick = {
+                            onSelect(if (isSel) StatFilter.ALL else filter)
+                        })
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("$n", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = if (isSel) p.accent else color, maxLines = 1)
+                    Text(label, fontSize = 10.sp, color = if (isSel) p.accent else p.hint, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
                 }
             }
         }
@@ -160,10 +187,11 @@ fun SourceCompactRow(
             .padding(start = NovelTokens.RowPadH, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // v1.4.29：批量模式也留状态圆点——原来圆点位被勾选框顶掉，折叠组里更看不见通断。
+        Box(Modifier.size(NovelTokens.RowDot).clip(CircleShape).background(dotColor))
+        Spacer(Modifier.width(NovelTokens.RowInnerGap))
         if (batchMode) {
             MiniCheck(selected) { onSelect(it) }
-        } else {
-            Box(Modifier.size(NovelTokens.RowDot).clip(CircleShape).background(dotColor))
             Spacer(Modifier.width(NovelTokens.RowInnerGap))
         }
         Text(

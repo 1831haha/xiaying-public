@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.SearchOff
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -90,6 +91,7 @@ import com.movieshell.data.novel.BookProbeStore
 import com.movieshell.data.novel.BookRuleEngine
 import com.movieshell.data.novel.toSourceHealth
 import com.movieshell.domain.model.shortLabel
+import com.movieshell.domain.model.SourceHealth
 import com.movieshell.domain.model.BookSource
 import com.movieshell.data.novel.BookSourceManager
 import com.movieshell.data.novel.NovelContentService
@@ -174,6 +176,8 @@ fun BookSourceScreen(
     var textEditPyText by remember { mutableStateOf("") }
     // v0.197.0：阅读式书源列表——顶部搜索过滤 + 批量选择（全选/反选/删除）
     var srcQuery by remember { mutableStateOf("") }
+    // v1.4.29：点统计区一格按档筛列表（全部/启用/失效/未验证），再点回全部；与搜索词叠加。
+    var statFilter by remember { mutableStateOf(StatFilter.ALL) }
     var batchMode by remember { mutableStateOf(false) }
     var selectedSrcKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
     var batchDeleteConfirm by remember { mutableStateOf(false) }
@@ -189,8 +193,15 @@ fun BookSourceScreen(
         }
     }
     // v1.4.27 解缠⑧：过滤与选择 key 统一走行模型 SourceRow（口径逐字不变，界面不动）。
-    val shownRows = remember(pyRules, sources, srcQuery) {
-        SourceRow.rows(pyRules, sources).filter { it.matches(srcQuery) }
+    // v1.4.29：统计筛选叠加在搜索词上；PY 行只认启用档，失效/未验证只看 JSON（与统计口径一致）。
+    val shownRows = remember(pyRules, sources, srcQuery, statFilter, probeMap, pyEnabled) {
+        SourceRow.rows(pyRules, sources).filter { row ->
+            if (!row.matches(srcQuery)) return@filter false
+            when (row) {
+                is SourceRow.Py -> statFilter.matchesRow(true, row.rule.name in pyEnabled, SourceHealth.Untested)
+                is SourceRow.Json -> statFilter.matchesRow(false, row.source.enabled, probeMap[row.source.key].toSourceHealth())
+            }
+        }
     }
     val shownPy = remember(shownRows) { shownRows.filterIsInstance<SourceRow.Py>().map { it.rule } }
     val shownJson = remember(shownRows) { shownRows.filterIsInstance<SourceRow.Json>().map { it.source } }
@@ -209,8 +220,9 @@ fun BookSourceScreen(
         }
     }
     // 批量“全选/反选”只作用于看得见的行——折叠组里的源不被一并勾上误删。
-    val visibleSelectKeys = remember(shownRows, jsonGroups, collapsedGroups, srcQuery) {
-        val hidden = if (jsonGroups.size > 1 && srcQuery.isBlank()) {
+    // v1.4.29：统计筛选时同样全部展开（与搜索时一致），筛出来的行都算看得见。
+    val visibleSelectKeys = remember(shownRows, jsonGroups, collapsedGroups, srcQuery, statFilter) {
+        val hidden = if (jsonGroups.size > 1 && srcQuery.isBlank() && statFilter == StatFilter.ALL) {
             jsonGroups.filter { it.first in collapsedGroups }
                 .flatMap { g -> g.second.map { SourceRow.Json(it).selectKey } }.toSet()
         } else emptySet()
@@ -251,18 +263,19 @@ fun BookSourceScreen(
         BookProbeStore.load(context)
     }
 
-    // v1.2.27：发现页并进书源管理——进页即探连通（原 DiscoverTab 的逻辑平移）：
-    // 只探带发现分类的已启用 JSON 源，未知、地址对不上或超过 24 小时的才探；
-    // 离页自动取消在途探测，取消按取消处理，绝不写成“不通”。
-    LaunchedEffect(sources) {
-        val now = System.currentTimeMillis()
-        sources.filter { it.enabled && it.exploreUrl.isNotBlank() }.forEach { src ->
-            if (src.url.isBlank()) return@forEach
-            val rec = probeMap[src.key]
-            if (rec != null && rec.url == src.url && now - rec.time < 24L * 60 * 60 * 1000) return@forEach
-            launch {
-                val r = BookProbe.probeSource(src)
-                BookProbeStore.update(context, src.key, r)
+    // v1.4.29：进页不再自动探测书源——1700 个源每次进页都跑一遍，又慢又耗电；
+    // 只读上次存下来的探测记录，点“更多 → 检测全部”才手动跑一遍（24 小时内已探过的跳过）。
+    val probeAllOnce: () -> Unit = {
+        scope.launch {
+            val now = System.currentTimeMillis()
+            sources.filter { it.enabled && it.exploreUrl.isNotBlank() }.forEach { src ->
+                if (src.url.isBlank()) return@forEach
+                val rec = probeMap[src.key]
+                if (rec != null && rec.url == src.url && now - rec.time < 24L * 60 * 60 * 1000) return@forEach
+                launch {
+                    val r = BookProbe.probeSource(src)
+                    BookProbeStore.update(context, src.key, r)
+                }
             }
         }
     }
@@ -419,8 +432,11 @@ fun BookSourceScreen(
                 GlassMenuItem(Icons.Outlined.Checklist, if (batchMode) "退出批量" else "批量管理", {
                     showMoreMenu = false
                     batchMode = !batchMode
+                    // v1.4.29：进批量就把分组全展开——原来 100+ 源默认全折叠，行藏在组里看不见通断。
+                    if (batchMode) collapsedGroups = emptySet()
                     if (!batchMode) selectedSrcKeys = emptySet()
                 })
+                GlassMenuItem(Icons.Outlined.Sync, "检测全部", { showMoreMenu = false; probeAllOnce() })
                 GlassMenuItem(Icons.Outlined.Explore, "发现聚合", { showMoreMenu = false; onOpenExploreAggregate() })
                 GlassMenuItem(
                     Icons.Outlined.AutoFixHigh, "净化规则",
@@ -462,7 +478,7 @@ fun BookSourceScreen(
             }
             Spacer(Modifier.height(NovelTokens.SearchToList))
         }
-        SourceStatsStrip(stats, Modifier.padding(horizontal = NovelTokens.RowMarginH))
+        SourceStatsStrip(stats, Modifier.padding(horizontal = NovelTokens.RowMarginH), selected = statFilter, onSelect = { statFilter = it })
         if (!embedded) {
             androidx.compose.animation.AnimatedVisibility(
                 visible = showSearch || srcQuery.isNotEmpty(),
@@ -541,7 +557,7 @@ fun BookSourceScreen(
             // 只有一个分组（含全是“未分组”）时不出组头，与改版前扁平列表一样。搜索时全部展开。
             jsonGroups.forEach { (groupName, groupList) ->
                 val showHeaders = jsonGroups.size > 1
-                val collapsed = showHeaders && srcQuery.isBlank() && groupName in collapsedGroups
+                val collapsed = showHeaders && srcQuery.isBlank() && statFilter == StatFilter.ALL && groupName in collapsedGroups
                 if (showHeaders) {
                     item(key = "jgrp_$groupName") {
                         SourceGroupHeader(groupName, groupList.size, collapsed, onToggle = {

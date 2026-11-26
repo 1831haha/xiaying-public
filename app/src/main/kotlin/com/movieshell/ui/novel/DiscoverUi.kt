@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -100,7 +100,9 @@ fun DiscoverCategoryNav(
         contentPadding = PaddingValues(horizontal = NovelTokens.BarMarginH),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        items(titles, key = { it }) { t ->
+        // v1.4.29：标题作 key 会撞——同一源的分类表里同一标题可出现两次；
+        // 下标拼标题作 key，重复标题不再闪退（与聚合发现页同类修法）。
+        itemsIndexed(titles, key = { index, t -> "$index:$t" }) { _, t ->
             val isSel = t == selected
             Box(
                 modifier = Modifier

@@ -181,7 +181,9 @@ fun ExploreAggregateScreen(
                                     }
                                     if (cats.isNotEmpty()) {
                                         LazyRow {
-                                            items(cats, key = { it.title }) { cat ->
+                                            // v1.4.29：分类 key 不能用标题——同一源的发现地址里同一标题
+                                            // 可出现两次（不同地址），标题作 key 直接闪退；地址唯一。
+                                            items(cats, key = { it.url }) { cat ->
                                                 FilterChip(
                                                     selected = cat.title == selTitle,
                                                     onClick = {
