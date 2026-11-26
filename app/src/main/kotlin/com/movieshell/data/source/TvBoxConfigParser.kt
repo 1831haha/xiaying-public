@@ -1,5 +1,6 @@
 package com.movieshell.data.source
 
+import com.movieshell.core.util.Base64Envelope
 import com.movieshell.domain.model.ParseConfig
 import com.movieshell.domain.model.SiteConfig
 import com.movieshell.domain.model.TvBoxConfig
@@ -33,7 +34,7 @@ object TvBoxConfigParser {
      */
     fun hasSitesArray(raw: String): Boolean {
         return runCatching {
-            val clean = stripJsonComments(raw.trim().removePrefix("\uFEFF"))
+            val clean = stripJsonComments(Base64Envelope.unwrap(raw).trim().removePrefix("\uFEFF"))
             val root = json.parseToJsonElement(clean).jsonObject
             root["sites"] is JsonArray
         }.getOrDefault(false)
@@ -43,7 +44,8 @@ object TvBoxConfigParser {
     fun parseConfig(raw: String): TvBoxConfig {
         return try {
             // v0.11.6：订阅 JSON 可能是带 // 注释 / BOM 的宽松格式，先清洗
-            val clean = stripJsonComments(raw.trim().removePrefix("\uFEFF"))
+            // 1.4.24：先解 base64 信封（wmz），再按 JSON 解析
+            val clean = stripJsonComments(Base64Envelope.unwrap(raw).trim().removePrefix("\uFEFF"))
             val root = json.parseToJsonElement(clean).jsonObject
             TvBoxConfig(
                 sites = root["sites"]?.asArray().orEmpty()
@@ -69,7 +71,8 @@ object TvBoxConfigParser {
      * 命中任一形态返回非空列表；否则返回 null，调用方继续走普通订阅解析。
      */
     fun parseWarehouse(raw: String): List<WarehouseEntry>? {
-        val clean = raw.trim().removePrefix("\uFEFF")
+        // 1.4.24：先解 base64 信封（wmz），包着多仓 JSON 的也能认
+        val clean = Base64Envelope.unwrap(raw).trim().removePrefix("\uFEFF")
         if (clean.isEmpty()) return null
         if (clean.startsWith("{")) {
             return runCatching {
