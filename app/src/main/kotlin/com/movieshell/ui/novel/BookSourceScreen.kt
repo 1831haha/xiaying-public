@@ -1288,7 +1288,9 @@ fun BookSourceScreen(
             TechTextField(
                 value = testKeyword,
                 onValueChange = { testKeyword = it },
-                placeholder = BookSource.DEFAULT_CHECK_KEYWORD,
+                // v1.4.29（用户 2026-11-27 要求）：不传 placeholder——TechTextField 有值时
+                // 会把 placeholder 缩成框内顶部小标签，预填「斗罗」时框里上下两个「斗罗」
+                // 重复；空白回落本来就走 resolveKeyword，不靠 placeholder。
                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { confirm() }),
