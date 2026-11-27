@@ -308,6 +308,11 @@ fun PlayerScreen(
         }
     }
     val playUseProxy = remember { playProxyKey?.let { ClashProxy.isSourceProxied(it) } ?: false }
+    // v1.4.33：跨源续播搜的目标剧名——详情页内嵌播放器传的 title 带“ 第X集”后缀，
+    // 精确片名搜不到；infoName 是详情页传的真片名，优先用，没有时再剥 title 的后缀。
+    val resumeShowName = remember(infoName, title) {
+        infoName.ifBlank { CrossSourceResume.stripEpisodeSuffix(title) }.trim()
+    }
     val scope = rememberCoroutineScope()
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     // v0.109.0 A2：双引擎画面 View 引用（keepScreenOn 用，Media3/libmpv 统一）
@@ -941,17 +946,34 @@ fun PlayerScreen(
 
     /**
      * v1.1.31：播放失败自动换源——当前源全部线路耗尽时，在其他源里搜同名剧（精确片名），
-     * 按健康分取最稳的一个，跳它的详情页同集播。只试一次；找不到/搜不到就落回原报错。
+     * 按健康分取最稳的一个，跳它的详情页同集播。找不到/搜不到就落回原报错。
      * 直播、没标题、没回调时不走这条路。
+     * v1.4.33：搜目标改干净剧名（resumeShowName）——之前直接拿 title，
+     * 详情页内嵌播放器的 title 带“ 第X集”后缀，精确片名永远匹配不上，
+     * 自动换源等于没接线；同剧同集连续失败时走 CrossSourceResume 会话，
+     * 排除已试过的源往下顺延、上限 3 跳，跳满落回原报错。
      */
     fun tryAutoSwitchSource(fallbackMsg: String) {
-        val target = title.trim()
+        val target = resumeShowName
         val cb = onAutoSwitchSource
         if (cb == null || isLive || target.isBlank() || autoSourceTried) {
             errorMsg = fallbackMsg
             return
         }
         autoSourceTried = true
+        val currentKeys = buildSet {
+            siteKey?.takeIf { it.isNotBlank() }?.let { add(it) }
+            DrpySourceManager.activeRuleName()?.let { add("$LOCAL_DRPY_PREFIX$it") }
+            PySourceManager.activeRuleName()?.let { add("$LOCAL_PY_PREFIX$it") }
+            PhpSourceManager.activeRuleName()?.let { add("php:$it") }
+        }
+        // v1.4.33：同剧同集跳满 3 个源即停，不死循环；当前源一并记进已试集合。
+        if (!CrossSourceResume.begin(target, PlaySession.episodeIndex, currentKeys)) {
+            AppToast.show(context, "已试过多个源，仍无法播放", long = false)
+            errorMsg = fallbackMsg
+            return
+        }
+        val excludedKeys = CrossSourceResume.excludedKeys()
         AppToast.show(context, "当前源播不了，正在找其他源…", long = false)
         scope.launch {
             val repo = SiteRepository(
@@ -961,18 +983,13 @@ fun PlayerScreen(
             runCatching {
                 withContext(Dispatchers.IO) { repo.loadFromConfig(buildSearchConfigJson(context)) }
             }
-            val currentKeys = buildSet {
-                siteKey?.takeIf { it.isNotBlank() }?.let { add(it) }
-                DrpySourceManager.activeRuleName()?.let { add("$LOCAL_DRPY_PREFIX$it") }
-                PySourceManager.activeRuleName()?.let { add("$LOCAL_PY_PREFIX$it") }
-                PhpSourceManager.activeRuleName()?.let { add("php:$it") }
-            }
             var bestSite: Site? = null
             var bestVod: Vod? = null
             var bestScore = -1
             withTimeoutOrNull(12_000) {
                 repo.searchAllFlow(target).takeWhile { group ->
-                    if (group.site.key in currentKeys) return@takeWhile true
+                    // v1.4.33：当前源与本轮已跳过的源都不再候选，往下顺延。
+                    if (group.site.key in excludedKeys) return@takeWhile true
                     val exact = group.vods.firstOrNull { it.vodName.trim() == target }
                     if (exact != null) {
                         val s = SourceHealthStore.score(group.site.key)
@@ -990,6 +1007,8 @@ fun PlayerScreen(
             val site = bestSite
             val vod = bestVod
             if (site != null && vod != null && bestScore >= 30) {
+                // v1.4.33：跳之前记进已试集合——新源播失败回来续搜时不再回跳它。
+                CrossSourceResume.recordHop(site.key)
                 LogBus.i("Player", "播放失败，自动换源：${site.name}（健康分 $bestScore）")
                 AppToast.show(context, "已自动换源：${site.name}", long = false)
                 cb(vod.vodId, site.key, PlaySession.episodeIndex)
@@ -2766,6 +2785,10 @@ fun PlayerScreen(
                 if (isPlaying && !liveEverPlayed) {
                     liveEverPlayed = true
                     if (isLive) onLiveFirstPlayed?.invoke()
+                }
+                // v1.4.33：播起来了，本轮跨源续播会话结束——下次失败重新计 3 跳。
+                if (isPlaying && !isLive) {
+                    CrossSourceResume.clearIfActiveFor(resumeShowName, PlaySession.episodeIndex)
                 }
                 if (!scrubbing) pos = EngineHost.currentPosition()
                 dur = EngineHost.duration()

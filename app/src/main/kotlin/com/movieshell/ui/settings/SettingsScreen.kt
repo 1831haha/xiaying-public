@@ -207,6 +207,8 @@ fun SettingsScreen(
     // v0.80.0：主题改内联三段选择，不再弹窗
     val themeMode by ThemeStore.mode.collectAsState()
     var backupExpanded by remember { mutableStateOf(false) }
+    // v1.4.33：隐私政策弹窗守卫（WorkBuddy P0-3：App 内 0 处隐私政策入口）。
+    var showPrivacyPolicy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // v1.1.31：媒体服务器入口副标题（已添加台数）
     val embyServers by EmbyStore.servers.collectAsState()
@@ -663,6 +665,14 @@ fun SettingsScreen(
                         )
                     },
                 )
+                // v1.4.33：隐私政策入口（WorkBuddy P0-3）——点开 TechDialog 看全文。
+                SegItem(
+                    position = SegPos.Middle,
+                    icon = Icons.Outlined.PrivacyTip,
+                    title = "隐私政策",
+                    subtitle = "不读通讯录 / 短信 / 位置 / 照片",
+                    onClick = { showPrivacyPolicy = true },
+                )
                 // v0.188.0：关于不可点，版本信息在副标题里展示
                 SegItem(
                     position = SegPos.Last,
@@ -679,6 +689,30 @@ fun SettingsScreen(
                 )
                     }
                 }
+            }
+        }
+        // v1.4.33：隐私政策全文（WorkBuddy P0-3）——只写实际做法，不写空话；
+        // “所有文件访问权限”的用途写明：只读用户自己放进 xiaying/ 文件夹的规则与源文件。
+        if (showPrivacyPolicy) {
+            TechDialog(
+                onDismissRequest = { showPrivacyPolicy = false },
+                title = "隐私政策",
+                confirmText = "知道了",
+                dismissText = null,
+                onConfirm = { showPrivacyPolicy = false },
+                compact = false,
+            ) {
+                Text(
+                    "侠影是一款本地影视聚合应用，不注册账号，不收集身份信息。\n\n" +
+                        "不读取的内容：通讯录、短信、通话记录、位置、照片、麦克风。App 没有申请这些权限，也不会读取。\n\n" +
+                        "联网：只向你自己添加的源地址、订阅地址、弹幕与节目单地址发请求；播放时直链只向源站发请求。不向任何第三方统计或广告服务上报数据。\n\n" +
+                        "存储：设置、播放历史、收藏、书架、追剧存在 App 私有目录。你从文件管理器放进手机存储根目录 xiaying/ 文件夹里的规则与源文件（js、py、php、web、live、plugins 等），App 会读取——这就是“所有文件访问权限”的用途，只读这一个文件夹。没有授权时自动退到 App 私有目录，功能照常；授权可在系统设置里随时收回。\n\n" +
+                        "权限清单：联网、查看网络状态、保持唤醒（音乐息屏缓冲）、通知、前台服务（下载、磁力、音乐播放）、存储（读写 xiaying/ 文件夹）。\n\n" +
+                        "明文流量：部分源站只支持 http，App 允许明文请求，这是源站的要求，不是 App 在收集数据。\n\n" +
+                        "播放记录、搜索历史只存本机，可在设置页数据管理里清除。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
             }
         }
         SettingDragOverlay(dragState, SettingRowStyle.Card, onOpenMarketClick, dataActions)

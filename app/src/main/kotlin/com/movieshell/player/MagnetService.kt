@@ -16,7 +16,13 @@ class MagnetService : Service() {
     override fun onCreate() {
         super.onCreate()
         // v0.294.38：前台服务 + 通知，切到后台 / 画中画时系统不回收磁力进程
-        runCatching {
+        // v1.4.33：startForeground 失败不再只记日志——失败时服务若还活着，
+        // 系统会在 5 秒内以 RemoteServiceException 杀掉 :magnet 进程，
+        // 磁力“边下边播”直接断。失败时立刻把原因写进端口文件（主进程
+        // MagnetRemote.ensure() 读到 fail: 即向用户报“磁力引擎启动失败”，
+        // 可见、可重试），再 stopSelf()，不启动引擎线程（否则引擎起来后
+        // 端口文件又被覆盖成端口号，主进程以为引擎可用，实际服务已死）。
+        val foregroundOk = runCatching {
             com.movieshell.data.download.Notify.ensureChannels(this)
             val n = androidx.core.app.NotificationCompat.Builder(this, com.movieshell.data.download.Notify.CH_DOWNLOAD)
                 .setSmallIcon(com.movieshell.R.drawable.ic_stat)
@@ -28,7 +34,14 @@ class MagnetService : Service() {
             if (android.os.Build.VERSION.SDK_INT >= 29) {
                 startForeground(9101, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             } else startForeground(9101, n)
-        }.onFailure { LogBus.w("XiaYingMagnet", "磁力前台服务启动失败：${it.message}") }
+        }.onFailure { LogBus.w("XiaYingMagnet", "磁力前台服务启动失败：${it.message}") }.isSuccess
+        if (!foregroundOk) {
+            runCatching {
+                MagnetRemote.portFile(applicationContext).writeText("fail:前台服务启动失败")
+            }
+            stopSelf()
+            return
+        }
         Thread({
             try {
                 XiaYingMagnetEngine.ensureHttp(applicationContext)
