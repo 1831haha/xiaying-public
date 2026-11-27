@@ -102,6 +102,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -153,6 +154,7 @@ import com.movieshell.ui.components.V5SectionTitle
 import com.movieshell.ui.components.StatusRing
 import com.movieshell.ui.components.StatusRingState
 import com.movieshell.ui.components.color
+import com.movieshell.ui.components.sheetListScrollGuard
 import com.movieshell.ui.settings.SettingsRow
 import com.movieshell.ui.theme.FlowingGlowBackground
 import kotlinx.coroutines.Dispatchers
@@ -2192,8 +2194,11 @@ private fun HomeCapsule(
 
 /**
  * 筛选条里的一个维度（v0.279.0 起“组名 当前值”下拉；v0.292.0 V5：M3 FilterChip + ▾）。
- * 未选显示组名，已选显示所选值并带勾（secondaryContainer）；点开下拉列出全部选项，
+ * 未选显示组名，已选显示所选值并带勾（secondaryContainer）；点开列出全部选项，
  * 再点已选中的取消本组筛选（与原来 chip 行为一致）。
+ * v1.4.31：下拉改底部弹窗四列宫格（用户点选 C）——长列表一屏看更多，不用在
+ * 窄条里滑半天；选中态走 tertiaryContainer 绿（与“换一换”同色）；宫格用
+ * sheetListScrollGuard 守嵌套滚动，超长列表在弹窗内滚、滚到顶下滑才收弹窗。
  */
 @Composable
 private fun HomeFilterDim(
@@ -2205,36 +2210,70 @@ private fun HomeFilterDim(
     var open by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     val selName = options.firstOrNull { it.second == selectedValue }?.first
-    Box {
-        V5Chip(
-            text = selName ?: name.ifBlank { "全部" },
-            selected = selName != null,
-            onClick = { open = true },
-            trailingIcon = Icons.Filled.ArrowDropDown,
-        )
-        AppDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEach { (label, value) ->
-                val on = value == selectedValue
-                DropdownMenuItem(
-                    text = {
+    V5Chip(
+        text = selName ?: name.ifBlank { "全部" },
+        selected = selName != null,
+        onClick = { open = true },
+        trailingIcon = Icons.Filled.ArrowDropDown,
+    )
+    if (open) {
+        val gridState = rememberLazyGridState()
+        ModalBottomSheet(
+            onDismissRequest = { open = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            shape = RoundedCornerShape(
+                topStart = V5.CornerMd,
+                topEnd = V5.CornerMd,
+            ),
+            containerColor = cs.surface,
+        ) {
+            Text(
+                text = name.ifBlank { "全部" },
+                style = MaterialTheme.typography.titleLarge,
+                color = cs.onSurface,
+                modifier = Modifier.padding(start = V5.Gutter, top = 8.dp, bottom = 12.dp),
+            )
+            LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Fixed(4),
+                contentPadding = PaddingValues(
+                    start = V5.Gutter,
+                    end = V5.Gutter,
+                    bottom = 24.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .sheetListScrollGuard { gridState.canScrollBackward },
+            ) {
+                // 下标取项，不用 value 作 key：不同源的 value 可能重复，撞 key 会闪退。
+                items(options.size) { index ->
+                    val (label, value) = options[index]
+                    val on = value == selectedValue
+                    Box(
+                        modifier = Modifier
+                            .height(V5.Button)
+                            .clip(RoundedCornerShape(V5.CornerMd))
+                            .background(if (on) cs.tertiaryContainer else cs.surfaceVariant)
+                            .clickable {
+                                open = false
+                                onPick(value)
+                            }
+                            .padding(horizontal = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         Text(
-                            label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (on) cs.onSecondaryContainer else cs.onSurface,
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (on) cs.onTertiaryContainer else cs.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
                         )
-                    },
-                    trailingIcon = if (on) {
-                        { Icon(Icons.Filled.Check, null, tint = cs.onSecondaryContainer, modifier = Modifier.size(20.dp)) }
-                    } else null,
-                    onClick = {
-                        open = false
-                        onPick(value)
-                    },
-                    modifier = Modifier
-                        .padding(horizontal = 8.dp)
-                        .clip(RoundedCornerShape(V5.CornerMd))
-                        .background(if (on) cs.secondaryContainer else Color.Transparent),
-                )
+                    }
+                }
             }
         }
     }
