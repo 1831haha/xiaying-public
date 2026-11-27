@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -82,11 +82,14 @@ fun ExploreAggregateScreen(
     val categoriesByKey = remember(aggSources) {
         aggSources.associate { it.key to NovelSourceEngine.parseExploreCategories(it.exploreUrl) }
     }
+    // v1.4.29（TA 审码必修）：选中态按分类地址存（源 key → 分类 url），不按标题——
+    // 同标题可出现两次，标题存选中会让两 chip 同时高亮、反解还取错第一条。
     var selectedCat by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     // v0.247.0（F14）：结果/加载/失败原来只按源分，换分类就整组“加载中…”、
     // 上个分类的结果也没留住；现在按（源，分类地址）区分——地址即抓取
-    // 身份：同地址同内容可共态，同标题不同地址分态（标题在数组形源里
-    // 可能重复，地址不会）。切换分类各抓各的、抓过的分类切回去直接显示。
+    // 身份：同标题不同地址分态；同地址两条共用一份结果（解析层不去重，
+    // 同地址出现两次是合法的，见 ExploreCategoryKeyTest）。切换分类各抓
+    // 各的、抓过的分类切回去直接显示。
     var resultsByCat by remember { mutableStateOf<Map<Pair<String, String>, List<NovelSearchResult>>>(emptyMap()) }
     var loadingCats by remember { mutableStateOf<Set<Pair<String, String>>>(emptySet()) }
     var failedCats by remember { mutableStateOf<Set<Pair<String, String>>>(emptySet()) }
@@ -112,7 +115,7 @@ fun ExploreAggregateScreen(
             val first = cats.firstOrNull() ?: return@forEach
             val firstKey = src.key to first.url
             if (resultsByCat.containsKey(firstKey) || loadingCats.contains(firstKey)) return@forEach
-            selectedCat = selectedCat + (src.key to first.title)
+            selectedCat = selectedCat + (src.key to first.url)
             load(src, first)
         }
     }
@@ -154,8 +157,8 @@ fun ExploreAggregateScreen(
                 else -> LazyColumn(Modifier.fillMaxSize()) {
                     aggSources.forEach { src ->
                         val cats = categoriesByKey[src.key].orEmpty()
-                        val selTitle = selectedCat[src.key] ?: cats.firstOrNull()?.title
-                        val selCat = cats.firstOrNull { it.title == selTitle } ?: cats.firstOrNull()
+                        val selUrl = selectedCat[src.key] ?: cats.firstOrNull()?.url
+                        val selCat = cats.firstOrNull { it.url == selUrl } ?: cats.firstOrNull()
                         val selKey = selCat?.let { src.key to it.url }
                         val raw = selKey?.let { resultsByCat[it] }.orEmpty()
                         val isLoadingCat = selKey != null && loadingCats.contains(selKey)
@@ -181,13 +184,14 @@ fun ExploreAggregateScreen(
                                     }
                                     if (cats.isNotEmpty()) {
                                         LazyRow {
-                                            // v1.4.29：分类 key 不能用标题——同一源的发现地址里同一标题
-                                            // 可出现两次（不同地址），标题作 key 直接闪退；地址唯一。
-                                            items(cats, key = { it.url }) { cat ->
+                                            // v1.4.29：分类 key 不能用标题也不能只用地址——同一标题可出现
+                                            // 两次（不同地址），同一地址也可出现两次（解析层不去重），
+                                            // 只按下标＋地址复合才恒唯一；选中态同样按地址存。
+                                            itemsIndexed(cats, key = { index, cat -> "$index:${cat.url}" }) { _, cat ->
                                                 FilterChip(
-                                                    selected = cat.title == selTitle,
+                                                    selected = cat.url == selUrl,
                                                     onClick = {
-                                                        selectedCat = selectedCat + (src.key to cat.title)
+                                                        selectedCat = selectedCat + (src.key to cat.url)
                                                         load(src, cat)
                                                     },
                                                     label = { Text(cat.title) },
@@ -218,7 +222,7 @@ fun ExploreAggregateScreen(
                                 }
                                 else -> item(key = "row-${src.key}") {
                                     LazyRow {
-                                        items(shown, key = { it.remoteId }) { book ->
+                                        itemsIndexed(shown, key = { index, book -> "$index:${book.remoteId}" }) { _, book ->
                                             val group = SourceGroup(src.key, src.name, raw)
                                             val isJoining = (group.key + book.remoteId) in joining
                                             Column(
