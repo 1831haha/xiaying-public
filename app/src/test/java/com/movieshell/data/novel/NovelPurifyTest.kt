@@ -26,7 +26,30 @@ class NovelPurifyTest {
     }
 
     @Test fun plainTextKeepsParagraphFormat() {
+        // v1.4.34 D-P2-7：原文真正的单换行是行内换行（诗歌/对白），不再改写成段落间隔。
         val raw = "第一段\n第二段"
-        assertEquals("　　第一段\n\n　　第二段", NovelPurifyEngine.purify(raw, emptyList()))
+        assertEquals("　　第一段\n第二段", NovelPurifyEngine.purify(raw, emptyList()))
+    }
+
+    @Test fun poetryLinesKeepSingleBreaksAndStanzaBreakStays() {
+        val raw = "床前明月光\n疑是地上霜\n\n举头望明月\n低头思故乡"
+        assertEquals(
+            "　　床前明月光\n疑是地上霜\n\n　　举头望明月\n低头思故乡",
+            NovelPurifyEngine.purify(raw, emptyList()),
+        )
+    }
+
+    @Test fun threeOrMoreNewlinesCollapseToOneBlankLine() {
+        val raw = "第一段\n\n\n\n第二段\n\n\n第三段"
+        assertEquals(
+            "　　第一段\n\n　　第二段\n\n　　第三段",
+            NovelPurifyEngine.purify(raw, emptyList()),
+        )
+    }
+
+    @Test fun builtinMergeBlankLinesRuleStillWorks() {
+        val raw = "第一段\n\n\n\n第二段"
+        val out = NovelPurifyEngine.purify(raw, NovelPurifyEngine.defaultRules())
+        assertEquals("　　第一段\n\n　　第二段", out)
     }
 }
