@@ -80,7 +80,7 @@ fun NetworkSettingsScreen(
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
-            topBar = { TabTopBar(title = "网络", onBack = onBack) },
+            topBar = { TabTopBar(title = "网络设置", onBack = onBack) },
             containerColor = cs.surfaceContainer,
         ) { inner ->
             LazyColumn(
