@@ -38,4 +38,17 @@ class MacCmsPlayerTest {
         assertEquals("https://p.com/a.m3u8", MacCmsPlayer.absolutize("/a.m3u8", "https://p.com/play/1"))
         assertNull(MacCmsPlayer.absolutize("abc123", "https://p.com/play/1"))
     }
+
+    @Test fun `nul codepoint is dropped not kept`() {
+        assertEquals("a", MacCmsPlayer.unescape("%00a"))
+        assertEquals("a", MacCmsPlayer.unescape("%u0000a"))
+        assertEquals("ab", MacCmsPlayer.unescape("a%00b"))
+    }
+
+    @Test fun `absolutize resolves bare relative paths against page dir`() {
+        assertEquals("https://p.com/play/a.m3u8", MacCmsPlayer.absolutize("a.m3u8", "https://p.com/play/1"))
+        assertEquals("https://p.com/play/play/x.mp4", MacCmsPlayer.absolutize("play/x.mp4", "https://p.com/play/1"))
+        assertEquals("https://p.com/up.m3u8", MacCmsPlayer.absolutize("../up.m3u8", "https://p.com/play/1"))
+        assertEquals("https://p.com/play/a.m3u8", MacCmsPlayer.absolutize("./a.m3u8", "https://p.com/play/1"))
+    }
 }
