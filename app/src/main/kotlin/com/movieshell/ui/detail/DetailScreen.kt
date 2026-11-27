@@ -1,5 +1,6 @@
 package com.movieshell.ui.detail
 
+import com.movieshell.R
 import com.movieshell.data.source.DoubanReviews
 import com.movieshell.data.source.DoubanReviews.DoubanReview
 import com.movieshell.data.source.ParseProgressBus
@@ -1565,7 +1566,7 @@ fun DetailScreen(
                                     }
                                 }
                                 LazyVerticalGrid(
-                                    columns = if (epViewGrid) GridCells.Fixed(3) else GridCells.Fixed(1),
+                                    columns = if (epViewGrid) GridCells.Fixed(context.resources.getInteger(R.integer.episode_grid_columns)) else GridCells.Fixed(1),
                                     state = epGridState,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -1705,7 +1706,7 @@ fun DetailScreen(
                                     }
                                 }
                                 LazyVerticalGrid(
-                                    columns = if (epViewGrid) GridCells.Fixed(3) else GridCells.Fixed(1),
+                                    columns = if (epViewGrid) GridCells.Fixed(context.resources.getInteger(R.integer.episode_grid_columns)) else GridCells.Fixed(1),
                                     state = epGridState,
                                     modifier = Modifier
                                         .fillMaxWidth()

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v1.4.34 D-P2-12：详情页选集网格列数（手机 3 列；见 values-sw600dp 平板 5 列）。 -->
+    <integer name="episode_grid_columns">3</integer>
+</resources>
