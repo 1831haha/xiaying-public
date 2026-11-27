@@ -713,6 +713,12 @@ fun ReaderScreen(
                     paginationStall.chapter = next.index
                     paginationStall.count = 0
                 }
+                // v1.4.34 第二轮补（TA 复审 S1）：恢复前置检查——tracker 是
+                // remember 持久、chapters 又是 effect key：本章 3 次真实失败
+                // 收手后，任何其他章正文到达都会重启 effect；没这行，每次重启
+                // 都会对同一停滞章再发一次注定失败的请求。加回后“每次停滞总共
+                // 3 次”，结果驱动计数本身不受影响（计数仍发生在真实失败后）。
+                if (paginationStall.count >= MAX_PAGINATION_STALLS) break
                 loadChapterSilent(next.index, force = true)
                 // 等本轮请求出结果：在途请求完成才算一次重试。
                 while (next.index in loadingChapters) delay(PAGINATION_STALL_POLL_MS)
