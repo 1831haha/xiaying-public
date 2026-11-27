@@ -17,8 +17,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.movieshell.MainActivity
 import com.movieshell.R
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 通知单入口（v0.26.0）。
@@ -40,19 +38,22 @@ object Notify {
     const val CH_PROBE = "source_probe"
 
     // v1.4.34 C 组 P2-01：通知 ID 不再用 String.hashCode()——不同标题/影片可能
-    // 撞同一个值（vodId 空串时全撞 0），互相覆盖。稳定映射：同一 key 在进程内
-    // 永远拿同一 ID（同片更新覆盖旧通知），不同 key 拿不同 ID；空串也有自己的 ID。
-    // 进程内有效即可（通知 ID 只在通知存活期间要求唯一）；上限 512 条防无限增长，
-    // 满了清掉最旧的一批（活跃通知极少同时超过这个数）。
-    private val stableIds = ConcurrentHashMap<String, Int>()
-    private val nextStableId = AtomicInteger(10000)
-
+    // 撞同一个值（vodId 空串时全撞 0），互相覆盖。
+    // v1.4.34 修复轮（GPT 审码 P2-01）：改确定性 ID——同一 key 在任何进程永远
+    // 拿同一 ID（同片更新覆盖旧通知，不同 key 不互盖；空串也有自己的 ID），
+    // 进程重启不再换号，通知栏里的旧通知能被新通知覆盖。SHA-256 前 4 字节
+    // 取 31 位再进 10 亿空间：key 只有几十个时碰撞概率可忽略；万一撞上也
+    // 只是两条通知互相覆盖，不丢数据、不影响 ID 之外的任何逻辑。
+    // 不用持久化映射：通知 ID 只在通知存活期间要求稳定，确定性哈希已满足，
+    // 且不引入 SharedPreferences 的读写与迁移。
     fun stableNotificationId(key: String): Int {
-        stableIds[key]?.let { return it }
-        val id = nextStableId.getAndIncrement()
-        if (stableIds.size >= 512) stableIds.keys.firstOrNull()?.let { stableIds.remove(it) }
-        stableIds.putIfAbsent(key, id)
-        return stableIds[key] ?: id
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(key.toByteArray(Charsets.UTF_8))
+        val raw = ((digest[0].toInt() and 0xFF) shl 24) or
+            ((digest[1].toInt() and 0xFF) shl 16) or
+            ((digest[2].toInt() and 0xFF) shl 8) or
+            (digest[3].toInt() and 0xFF)
+        return 10000 + (raw and Int.MAX_VALUE) % 1_000_000_000
     }
 
     const val EXTRA_ROUTE = "xiaying.route"

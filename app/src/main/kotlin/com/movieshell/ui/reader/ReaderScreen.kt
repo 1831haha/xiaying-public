@@ -496,13 +496,17 @@ fun ReaderScreen(
     }
 
     /** v0.244.0：静默拉一章（窗口预加载用）：不碰 contentLoading、不 Toast，失败就失败。
-     * v0.251.0：失败章记入会话失败记忆，本次会话不再自动重拉。 */
-    fun loadChapterSilent(index: Int) {
+     * v0.251.0：失败章记入会话失败记忆，本次会话不再自动重拉。
+     * v1.4.34 修复轮（GPT 审码 B-P1-3）：force 供分页前沿停滞重试——失败记忆
+     * 只拦普通预载，不拦分页的受控重试；force 时先清失败记忆再拉，加载中
+     * 仍不重复发请求（loadingChapters 守卫不变）。 */
+    fun loadChapterSilent(index: Int, force: Boolean = false) {
         val c = chapters.getOrNull(index) ?: return
         // v1.4.34 D-P2-9：url 为空也不再直接跳过——本地书正文在磁盘，
         // fetchChapter 会先从磁盘补（窗口化后内存里可能没它）。
         if (c.content.isNotBlank()) return
-        if (failedChapters.containsKey(index)) return
+        if (!force && failedChapters.containsKey(index)) return
+        if (force) failedChapters.remove(index)
         if (!loadingChapters.add(index)) return
         // v1.2.14：Job 在 launch 返回后同步登记——登记与启动之间没有挂起点，
         // 切书取消不可能漏掉刚启动的预载；finally 里摘掉自己，跑完与取消都不残留。
@@ -694,13 +698,17 @@ fun ReaderScreen(
                 // 无退避、无上限。同一章连续多轮仍无正文时指数退避（1s/2s/3s，
                 // 最多 3 次）后本轮收手；delay 只挂起协程，不占主线程。
                 // 正文到了则 chapters 变化重启 effect，本延迟随之取消。
+                // v1.4.34 修复轮（GPT 审码 B-P1-3）：重试必须用 force=true——
+                // 不带 force 时 loadChapterSilent 会被失败记忆（failedChapters）
+                // 直接拦掉，三次调用只有第一次是真实请求；force 只清本章的
+                // 失败记忆、加载中仍不重复发请求（loadingChapters 守卫不变）。
                 if (paginationStall.chapter != next.index) {
                     paginationStall.chapter = next.index
                     paginationStall.count = 0
                 }
                 if (paginationStall.count >= MAX_PAGINATION_STALLS) break
                 paginationStall.count++
-                loadChapterSilent(next.index)
+                loadChapterSilent(next.index, force = true)
                 delay(PAGINATION_STALL_BACKOFF_MS * paginationStall.count.toLong())
                 continue
             }

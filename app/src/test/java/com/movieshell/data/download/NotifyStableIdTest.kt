@@ -5,8 +5,9 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 /**
- * v1.4.34 C 组 P2-01：通知 ID 不再用 String.hashCode()——同一 key 在进程内
+ * v1.4.34 C 组 P2-01：通知 ID 不再用 String.hashCode()——同一 key 在任何进程
  * 永远拿同一 ID（同片更新覆盖旧通知），不同 key 拿不同 ID，空串也有自己的 ID。
+ * v1.4.34 修复轮：确定性 SHA-256 ID，跨进程稳定（见 stableNotificationId）。
  */
 class NotifyStableIdTest {
 

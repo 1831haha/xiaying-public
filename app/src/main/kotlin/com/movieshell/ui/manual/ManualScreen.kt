@@ -68,7 +68,7 @@ private val MANUAL_SECTIONS = listOf(
         title = "支持的源类型一览",
         points = listOf(
             "TVBox JSON 订阅：CMS type0 / type1 接口，可用，点「添加订阅」粘贴地址。",
-            "TVBox 完整订阅配置（含 sites 数组，如带几十个站的大包）：v0.5.1 起支持——站源页点订阅条目展开「解析站点」，CMS / drpy / PY / type=4 PHP 站可用，csp_ Java spider 站不支持。",
+            "TVBox 完整订阅配置（含 sites 数组，如带几十个站的大包）：v0.5.1 起支持——站源页点订阅条目展开「解析站点」，CMS / drpy / PY / type=4 PHP 站可用；csp_ Java spider 站见下面「Java spider（csp_ 站）」一节。",
             "csp_ 开头的 Java spider 源：v0.8.0 起支持，详见下面「Java spider（csp_ 站）」一节。",
             "JS drpy 规则：.js 文件，WebView 真执行，可用。",
             "PY 规则：.py 文件（hipy 风格），Chaquopy 内置 Python 直接执行，可用。",
@@ -94,9 +94,9 @@ private val MANUAL_SECTIONS = listOf(
     ManualSection(
         title = "各类源使用指南",
         points = listOf(
-            "CMS 采集站（type 0/1）：就是苹果 CMS 那套接口。站源页「接口站源」tab 点「添加订阅」粘贴 URL；添加后点订阅条目右边的展开箭头→「解析站点」，点某个站点设为当前源。",
-            "drpy JS 源：.js 规则文件。放 xiaying/js/（文件管理器直接拷，或站源页 JS tab 点「导入」）；JS tab 里点文件名就是激活当前源，长按有预览/编辑/分享等菜单。",
-            "PY 源：.py 规则文件（hipy 风格）。放 xiaying/py/；PY tab 点击激活。PY 引擎已内置（Chaquopy），第一次用初始化等 1~2 秒。",
+            "CMS 采集站（type 0/1）：就是苹果 CMS 那套接口。站源页「订阅源」tab 点「添加订阅」粘贴 URL；添加后点订阅条目右边的展开箭头→「解析站点」，点某个站点设为当前源。",
+            "drpy JS 源：.js 规则文件。放 xiaying/js/（文件管理器直接拷，或站源页「本地源」tab 点「导入」）；「本地源」tab 里点文件名就是激活当前源，长按有预览/编辑/分享等菜单。",
+            "PY 源：.py 规则文件（hipy 风格）。放 xiaying/py/；「本地源」tab 点击激活。PY 引擎已内置（Chaquopy），第一次用初始化等 1~2 秒。",
             "type=4 PHP 站：订阅填 http://127.0.0.1:19978/config.php 这类 PHP 服务地址；手机上 19978 的 PHP 服务要开着（别人服务器上的远端地址也行）。小说站走书源（书架→书源管理），漫画站暂不支持。",
             "Java spider（csp_ 站）：订阅自带。jar 自动下载到 xiaying/jar/，站源页这类站打「spider」徽标，直接点设为当前源。",
             "网页源：放 xiaying/web/ 的网站配置（.json）。网页源 tab 点击激活为当前源；播放靠内置浏览器嗅探抓直链。长按菜单里「打开嗅探浏览器」可手动进网页点播。",
@@ -108,10 +108,10 @@ private val MANUAL_SECTIONS = listOf(
         points = listOf(
             "首页搜索框上方：一行站源入口，点开 BottomSheet 切换当前源（本地规则+已解析订阅站点，选完首页立即重载）。",
             "站源页：顶部五个 tab——「订阅源」「本地源」「网页源」「批量检测」「回收站」；订阅源管订阅（添加/解析/删），本地源管 JS / PY / PHP 规则文件（导入/激活/长按菜单），网页源管网页源与通用网页源。",
-            "订阅添加：站源页「接口站源」tab→「添加订阅」粘贴 URL；本地有 TVBox JSON 文件的？目前只支持 URL 订阅。",
+            "订阅添加：站源页「订阅源」tab→「添加订阅」粘贴 URL；本地有 TVBox JSON 文件的？目前只支持 URL 订阅。",
             "规则文件添加：三种姿势——站源页对应 tab 点「导入」；文件管理器直接拷到 xiaying/js|py|php/；手机插电脑 U 盘模式拷。",
             "网页源添加：站源页「网页源」tab→「添加」，填名称和网址（http 开头）。",
-            "删除：在对应 tab 长按文件→「删除文件」二次确认；订阅在「接口站源」tab 删。",
+            "删除：在对应 tab 长按文件→「删除文件」二次确认；订阅在「订阅源」tab 删。",
         ),
     ),
     ManualSection(
@@ -147,7 +147,7 @@ private val MANUAL_SECTIONS = listOf(
     ManualSection(
         title = "备份与恢复",
         points = listOf(
-            "设置页「备份与恢复」：一键把接口站源列表和各分组激活状态导出成 JSON 文件，默认存到 /storage/emulated/0/xiaying/backup/，文件名带时间戳。",
+            "设置页「备份与恢复」：一键把订阅列表和各分组激活状态导出成 JSON 文件，默认存到 /storage/emulated/0/xiaying/backup/，文件名带时间戳。",
             "换手机 / 重装后，点「从文件恢复」选之前导出的文件，配置就回来了。",
             "备份文件里不含规则文件本身，只含站源地址和激活状态——规则文件请另外保存好。",
             "恢复时如果某条规则文件在新手机上不存在，会自动跳过，不会报错卡住。",

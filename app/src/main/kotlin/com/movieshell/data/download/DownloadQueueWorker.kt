@@ -451,14 +451,13 @@ class DownloadQueueWorker(
                 // 在旧字节后追加 200 响应体。
                 val append = resp.code == 206 && done > 0
                 if (append) {
-                    val cr = resp.header("Content-Range")
-                    val crStart = cr
-                        ?.let { Regex("""bytes (\d+)-""").find(it)?.groupValues?.get(1)?.toLongOrNull() }
-                    // 带 Content-Range 且起始字节 ≠ 本次 Range 起始：这段 body 绝不能续写，
-                    // 否则文件静默损坏；跳过写盘循环，use 块后删 part、重下一整份。
-                    // 无 Content-Range 的 206（不规范服务端）沿用旧逻辑信任它。
-                    if (crStart != null && crStart != done) {
-                        Log.w(TAG, "续传起始字节不符（要 $done，给 $crStart），放弃本次续传：${task.title}")
+                    // v1.4.34 修复轮（GPT 审码 B-P1-1）：206 续传必须有完整合法的
+                    // Content-Range，且起始字节等于本次 Range 起始。缺失、格式错、
+                    // 起始不符、end/total 不合理，一律视为错位——跳过写盘循环，
+                    // use 块后删 part、重下一整份（不信任无头 206 的 body）。
+                    val range = parseContentRange(resp.header("Content-Range"))
+                    if (range == null || range.first != done) {
+                        Log.w(TAG, "续传 Content-Range 无效（要 $done，给 ${resp.header("Content-Range")}），放弃本次续传：${task.title}")
                         rangeMismatch = true
                         return@use
                     }
@@ -761,6 +760,25 @@ class DownloadQueueWorker(
     }
 
     /**
+     * v1.4.34 修复轮（GPT 审码 B-P1-1）：严格解析 Content-Range。
+     * 合法形如 `bytes 0-99/100` 或总量未知 `bytes 0-99/星号`；返回 (start, end, total)，
+     * total 为 -1 表未知。缺失、格式错、end < start、总量已知且 <= end，一律 null——
+     * 206 本身不能证明服务端返回的是客户端请求的那个字节区间，无合法头不续写。
+     */
+    private val contentRangeRe = Regex("""^bytes (\d+)-(\d+)/(\d+|\*)$""")
+
+    private fun parseContentRange(cr: String?): Triple<Long, Long, Long>? {
+        if (cr == null) return null
+        val m = contentRangeRe.find(cr.trim()) ?: return null
+        val start = m.groupValues[1].toLongOrNull() ?: return null
+        val end = m.groupValues[2].toLongOrNull() ?: return null
+        val total = if (m.groupValues[3] == "*") -1L else m.groupValues[3].toLongOrNull() ?: return null
+        if (end < start) return null
+        if (total >= 0 && total <= end) return null
+        return Triple(start, end, total)
+    }
+
+    /**
      * 小文件下载（分片/key/map）。
      * v0.171.0：先写同名 .part 文件（断点续传从 .part 长度起），整段写完
      * 才改名到最终文件——中途被杀/断网只留 .part，正式文件绝不会是半截；
@@ -781,16 +799,15 @@ class DownloadQueueWorker(
         http.newCall(reqB.build()).execute().use { resp ->
             if (!resp.isSuccessful && resp.code != 206) throw IllegalStateException("HTTP ${resp.code}")
             val body = resp.body ?: throw IllegalStateException("空响应")
-            // v1.4.34 B-P1-1：分片续传同样核对 206 Content-Range 起始字节，
-            // 与 downloadFile 同口径（v0.247.0 DS11）：错位 206 绝不续写；
-            // 删 part 后抛错，外层 downloadTask 重试时从头下该分片。
+            // v1.4.34 修复轮（GPT 审码 B-P1-1）：分片续传同样严格核对 206
+            // Content-Range（与 downloadFile 同口径）：缺失、格式错、起始不符、
+            // end/total 不合理，一律删 part 后抛错，外层 downloadTask 重试时从头下该分片。
             if (resp.code == 206) {
-                val crStart = resp.header("Content-Range")
-                    ?.let { Regex("""bytes (\d+)-""").find(it)?.groupValues?.get(1)?.toLongOrNull() }
-                if (crStart != null && crStart != start) {
-                    Log.w(TAG, "分片续传起始字节不符（要 $start，给 $crStart），删断点重下：$url")
+                val range = parseContentRange(resp.header("Content-Range"))
+                if (range == null || range.first != start) {
+                    Log.w(TAG, "分片续传 Content-Range 无效（要 $start，给 ${resp.header("Content-Range")}），删断点重下：$url")
                     part.delete()
-                    throw IllegalStateException("分片续传起始字节不符：$url")
+                    throw IllegalStateException("分片续传 Content-Range 无效：$url")
                 }
             }
             if (resp.code != 206 && start > 0) {
