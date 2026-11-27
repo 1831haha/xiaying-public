@@ -38,7 +38,7 @@ object DanmakuSource {
     @Serializable
     private data class SearchResp(val animes: List<Anime> = emptyList())
     @Serializable
-    private data class Anime(val animeId: Long = 0, val animeTitle: String = "")
+    internal data class Anime(val animeId: Long = 0, val animeTitle: String = "")
     @Serializable
     private data class CommentResp(val comments: List<Comment> = emptyList())
     @Serializable
@@ -90,9 +90,10 @@ object DanmakuSource {
     private suspend fun fetchCustomHost(host: String, title: String, episode: Int): List<Danmaku> {
         val q = java.net.URLEncoder.encode(title.take(20).trim(), "UTF-8")
         val searchBody = getBody("https://$host/api/v2/search/anime?keyword=$q") ?: return emptyList()
-        val animeId = json.parseToJsonElement(searchBody).jsonObject["animes"]
-            ?.jsonArray?.firstOrNull()?.jsonObject?.get("animeId")
-            ?.jsonPrimitive?.longOrNull ?: return emptyList()
+        // v1.4.34 B-P1-10：与内置源同口径——首结果不再盲选，按相似度挑
+        // （见 pickBestAnime），不像的直接不要，避免别家弹幕串台。
+        val animeId = runCatching { json.decodeFromString(SearchResp.serializer(), searchBody) }.getOrNull()
+            ?.let { pickBestAnime(it.animes, title.take(20).trim()) } ?: return emptyList()
         val bangumiBody = getBody("https://$host/api/v2/bangumi/$animeId") ?: return emptyList()
         val episodeId = pickEpisodeId(bangumiBody, episode) ?: return emptyList()
         val commentBody = getBody("https://$host/api/v2/comment/$episodeId") ?: return emptyList()
@@ -139,7 +140,7 @@ object DanmakuSource {
     suspend fun fetch(title: String, episode: Int = 1): List<Danmaku> = withContext(Dispatchers.IO) {
         try {
             // v0.55：先查磁盘缓存
-            val cacheKey = "${title.take(30)}_E$episode"
+            val cacheKey = cacheKeyFor(title, episode)
             loadCache(cacheKey)?.let {
                 LogBus.i(TAG, "弹幕磁盘缓存命中：$title E$episode -> ${it.size} 条")
                 return@withContext it
@@ -348,11 +349,54 @@ object DanmakuSource {
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return null
             val body = resp.body?.string() ?: return null
-            val parsed = json.decodeFromString(SearchResp.serializer(), body)
-            // 取第一个（最相关）
-            return parsed.animes.firstOrNull()?.animeId
+            val parsed = runCatching { json.decodeFromString(SearchResp.serializer(), body) }.getOrNull()
+                ?: return null
+            // v1.4.34 B-P1-10：首结果不再盲选——按相似度挑最像的，不像的
+            // 直接不要（宁可无弹幕，不串台），见 pickBestAnime。
+            return pickBestAnime(parsed.animes, q)
         }
     }
+
+    /**
+     * v1.4.34 B-P1-10：弹幕搜索结果相似度挑取（纯函数，供单测）。
+     * 归一化（小写、只留字母数字）后完全一致=1.0、互含=0.9；否则按字符集
+     * Dice 系数取前 10 个里最像的，低于 0.5 直接不要——搜“庆余年”回
+     * “庆余年2”这种同系列互含的仍放行，完全无关的首结果不再当 episodeId。
+     */
+    internal fun pickBestAnime(animes: List<Anime>, query: String): Long? {
+        if (animes.isEmpty() || query.isBlank()) return null
+        var best: Anime? = null
+        var bestScore = 0.0
+        for (a in animes.take(10)) {
+            val score = titleSimilarity(a.animeTitle, query)
+            if (score > bestScore) {
+                bestScore = score
+                best = a
+            }
+        }
+        return if (bestScore >= 0.5) best?.animeId else null
+    }
+
+    /** v1.4.34 B-P1-10：归一化标题相似度（完全一致=1.0，互含=0.9，否则字符集 Dice 系数）。 */
+    internal fun titleSimilarity(a: String, b: String): Double {
+        val na = a.lowercase().filter { it.isLetterOrDigit() }
+        val nb = b.lowercase().filter { it.isLetterOrDigit() }
+        if (na.isEmpty() || nb.isEmpty()) return 0.0
+        if (na == nb) return 1.0
+        if (na.contains(nb) || nb.contains(na)) return 0.9
+        val sa = na.toSet()
+        val sb = nb.toSet()
+        val inter = sa.intersect(sb).size
+        if (inter == 0) return 0.0
+        return 2.0 * inter / (sa.size + sb.size)
+    }
+
+    /**
+     * v1.4.34 B-P1-10：缓存 key 用完整标题——原 take(30) 会让前 30 字相同
+     * 的不同剧共用一份缓存（SafeFileName 的摘要只对截断后的 key 算，
+     * 截断前已撞名）；文件名唯一性仍由 SafeFileName 的 SHA-256 摘要保证。
+     */
+    internal fun cacheKeyFor(title: String, episode: Int): String = "${title}_E$episode"
 
     private fun fetchComments(animeId: Long, episode: Int): List<Comment> {
         val req = Request.Builder()
