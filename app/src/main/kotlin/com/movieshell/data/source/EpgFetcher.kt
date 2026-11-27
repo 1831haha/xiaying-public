@@ -33,6 +33,9 @@ object EpgFetcher {
 
     private const val TAG = "EpgFetcher"
 
+    /** v1.4.34 B-P1-11：带状态码的 HTTP 失败，供熔断按错误类型区分权重。 */
+    internal class EpgHttpException(val code: Int) : IllegalStateException("HTTP $code")
+
     data class Program(
         val title: String,
         val startMs: Long,
@@ -106,11 +109,18 @@ object EpgFetcher {
         cacheDir = dir
     }
 
-    /** v1.4.11 熔断：连续 3 次下载失败后，30 分钟内跳过该 URL 的网络请求。 */
-    internal const val BREAKER_MAX_FAILURES = 3
-    internal const val BREAKER_BLOCK_MS = 30 * 60 * 1000L
+    /** v1.4.11 熔断：连续 5 次下载失败后，10 分钟内跳过该 URL 的网络请求。
+     *  v1.4.34 B-P1-11：3 次/30 分钟过激——EPG 只是节目单 enrichment，
+     *  源端抖动半小时无节目单得不偿失；放宽到 5 次/10 分钟。
+     *  永久错（HTTP 4xx，见 recordDownloadFailure）权重 2，死链更快熔断。 */
+    internal const val BREAKER_MAX_FAILURES = 5
+    internal const val BREAKER_BLOCK_MS = 10 * 60 * 1000L
+    /** 失败计数衰减窗口：距上次失败超 1 小时，计数归零重计（残留不永久累积）。 */
+    internal const val BREAKER_FAILURE_DECAY_MS = 60 * 60 * 1000L
+    internal const val PERMANENT_FAILURE_WEIGHT = 2
     private val breakerLock = Any()
-    private val breakerFailures = mutableMapOf<String, Int>()
+    /** URL →（连续失败次数，上次失败时间）。 */
+    private val breakerFailures = mutableMapOf<String, Pair<Int, Long>>()
     private val breakerBlockedUntil = mutableMapOf<String, Long>()
 
     // v0.217.0（F21）：SimpleDateFormat 不是线程安全的，原来是共享单例，
@@ -228,6 +238,14 @@ object EpgFetcher {
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: EpgHttpException) {
+            // v1.4.34 B-P1-11：4xx（除 408/429）是永久错，权重加倍、死链更快熔断；
+            // 5xx/429/超时/IO 异常是瞬时错，按 1 计。
+            recordDownloadFailure(
+                epgUrl,
+                permanent = e.code in 400..499 && e.code != 408 && e.code != 429,
+            )
+            null
         } catch (e: Exception) {
             recordDownloadFailure(epgUrl)
             null
@@ -239,20 +257,29 @@ object EpgFetcher {
         runCatching { java.net.URI(url).host }.getOrNull().orEmpty()
 
     /**
-     * v1.4.11 熔断：按 EPG URL 记连续下载失败，3 次后 30 分钟内跳过网络。
+     * v1.4.11 熔断：按 EPG URL 记连续下载失败，5 次后 10 分钟内跳过网络。
      * 只算下载失败（超时/HTTP 错/异常），不算“下载成功但没匹配到台名”——
      * 后者可能是这台名不在该 EPG 里，不能因此封掉整条地址；且下载成功已写
      * 当日缓存，后续查直接读盘，不重复耗网络。
+     * v1.4.34 B-P1-11：按错误类型区分——permanent=true（HTTP 4xx 永久错，
+     * 地址本身已死）权重 2；超时/5xx/IO 异常是瞬时错，权重 1。
+     * 距上次失败超 1 小时，计数归零重计，旧残留不永久累积。
      */
-    internal fun recordDownloadFailure(url: String, nowMs: Long = System.currentTimeMillis()) {
+    internal fun recordDownloadFailure(
+        url: String,
+        nowMs: Long = System.currentTimeMillis(),
+        permanent: Boolean = false,
+    ) {
         synchronized(breakerLock) {
-            val n = (breakerFailures[url] ?: 0) + 1
+            val (prev, lastMs) = breakerFailures[url] ?: (0 to 0L)
+            val base = if (lastMs > 0 && nowMs - lastMs > BREAKER_FAILURE_DECAY_MS) 0 else prev
+            val n = base + if (permanent) PERMANENT_FAILURE_WEIGHT else 1
             if (n >= BREAKER_MAX_FAILURES) {
                 breakerFailures.remove(url)
                 breakerBlockedUntil[url] = nowMs + BREAKER_BLOCK_MS
-                LogBus.d(TAG, "EPG 熔断 host=${epgHost(url)} 连续失败 $n 次，30 分钟内跳过网络")
+                LogBus.d(TAG, "EPG 熔断 host=${epgHost(url)} 连续失败 $n 次，${BREAKER_BLOCK_MS / 60000} 分钟内跳过网络")
             } else {
-                breakerFailures[url] = n
+                breakerFailures[url] = n to nowMs
             }
         }
     }
@@ -280,6 +307,18 @@ object EpgFetcher {
         synchronized(breakerLock) {
             breakerFailures.clear()
             breakerBlockedUntil.clear()
+        }
+    }
+
+    /**
+     * v1.4.34 B-P1-11：源删除时清掉该源 EPG 地址的熔断残留——两 Map 原来
+     * 只在成功时 remove，删源后条目永久残留。LiveStore.removeSource /
+     * removeManual 调用。
+     */
+    fun purgeUrls(urls: Collection<String>) {
+        if (urls.isEmpty()) return
+        synchronized(breakerLock) {
+            urls.forEach { breakerFailures.remove(it); breakerBlockedUntil.remove(it) }
         }
     }
 
@@ -415,7 +454,7 @@ object EpgFetcher {
         job?.invokeOnCompletion { call.cancel() }
         try {
             call.execute().use { resp ->
-                if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+                if (!resp.isSuccessful) throw EpgHttpException(resp.code)
                 LogBus.d(TAG, "EPG 拉取完成 host=$host 路由=$route HTTP ${resp.code}")
                 val stream = resp.body?.byteStream() ?: throw IllegalStateException("空响应")
                 stream.use { input ->

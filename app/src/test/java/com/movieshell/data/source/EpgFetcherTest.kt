@@ -142,14 +142,14 @@ class EpgFetcherTest {
         assertFalse(EpgFetcher.epgNameMatches("CCTV", ""))
     }
 
-    // v1.4.11 第 1 步：熔断——按 URL 记连续下载失败，3 次后 30 分钟内跳过网络。
+    // v1.4.11 第 1 步：熔断——按 URL 记连续下载失败，5 次后 10 分钟内跳过网络。
+    // v1.4.34 B-P1-11：3 次/30 分钟过激，放宽到 5 次/10 分钟。
 
     @Test
-    fun breakerBlocksAfterThreeConsecutiveFailures() {
+    fun breakerBlocksAfterFiveConsecutiveFailures() {
         val url = "https://dead.example.com/epg.xml"
         val t = 1_000_000L
-        EpgFetcher.recordDownloadFailure(url, t)
-        EpgFetcher.recordDownloadFailure(url, t)
+        repeat(4) { EpgFetcher.recordDownloadFailure(url, t) }
         assertFalse(EpgFetcher.isBlocked(url, t))
         EpgFetcher.recordDownloadFailure(url, t)
         assertTrue(EpgFetcher.isBlocked(url, t))
@@ -161,26 +161,64 @@ class EpgFetcherTest {
     fun breakerSuccessResetsCount() {
         val url = "https://flaky.example.com/epg.xml"
         val t = 1_000_000L
-        EpgFetcher.recordDownloadFailure(url, t)
-        EpgFetcher.recordDownloadFailure(url, t)
+        repeat(4) { EpgFetcher.recordDownloadFailure(url, t) }
         EpgFetcher.recordDownloadSuccess(url)
-        EpgFetcher.recordDownloadFailure(url, t)
-        EpgFetcher.recordDownloadFailure(url, t)
+        repeat(4) { EpgFetcher.recordDownloadFailure(url, t) }
         assertFalse(EpgFetcher.isBlocked(url, t))
         EpgFetcher.recordDownloadFailure(url, t)
         assertTrue(EpgFetcher.isBlocked(url, t))
     }
 
     @Test
-    fun breakerExpiresAfterThirtyMinutes() {
+    fun breakerExpiresAfterTenMinutes() {
         val url = "https://dead.example.com/epg.xml"
         val t = 1_000_000L
-        repeat(3) { EpgFetcher.recordDownloadFailure(url, t) }
-        assertTrue(EpgFetcher.isBlocked(url, t + 29 * 60 * 1000L))
-        assertFalse(EpgFetcher.isBlocked(url, t + 30 * 60 * 1000L))
+        repeat(5) { EpgFetcher.recordDownloadFailure(url, t) }
+        assertTrue(EpgFetcher.isBlocked(url, t + 9 * 60 * 1000L))
+        assertFalse(EpgFetcher.isBlocked(url, t + 10 * 60 * 1000L))
         // 过期后下一次失败重新从 1 开始计，不立即再封。
-        EpgFetcher.recordDownloadFailure(url, t + 30 * 60 * 1000L)
-        assertFalse(EpgFetcher.isBlocked(url, t + 30 * 60 * 1000L))
+        EpgFetcher.recordDownloadFailure(url, t + 10 * 60 * 1000L)
+        assertFalse(EpgFetcher.isBlocked(url, t + 10 * 60 * 1000L))
+    }
+
+    // v1.4.34 B-P1-11：永久错权重 2（3 次 404 即熔断），失败计数 1 小时衰减，删源清理。
+
+    @Test
+    fun breakerPermanentFailuresWeighDouble() {
+        val url = "https://gone.example.com/epg.xml"
+        val t = 1_000_000L
+        EpgFetcher.recordDownloadFailure(url, t, permanent = true)
+        EpgFetcher.recordDownloadFailure(url, t, permanent = true)
+        assertFalse(EpgFetcher.isBlocked(url, t))
+        EpgFetcher.recordDownloadFailure(url, t, permanent = true)
+        assertTrue(EpgFetcher.isBlocked(url, t))
+    }
+
+    @Test
+    fun breakerFailureCountDecaysAfterOneHour() {
+        val url = "https://flaky2.example.com/epg.xml"
+        val t = 1_000_000L
+        val hour = 60 * 60 * 1000L
+        repeat(4) { EpgFetcher.recordDownloadFailure(url, t) }
+        assertFalse(EpgFetcher.isBlocked(url, t))
+        // 距上次失败超 1 小时，计数归零：再连 fail 4 次仍不封。
+        repeat(4) { EpgFetcher.recordDownloadFailure(url, t + hour + 1000L) }
+        assertFalse(EpgFetcher.isBlocked(url, t + hour + 1000L))
+        EpgFetcher.recordDownloadFailure(url, t + hour + 1000L)
+        assertTrue(EpgFetcher.isBlocked(url, t + hour + 1000L))
+    }
+
+    @Test
+    fun purgeUrlsClearsBreakerResidue() {
+        val url = "https://dead2.example.com/epg.xml"
+        val t = 1_000_000L
+        repeat(5) { EpgFetcher.recordDownloadFailure(url, t) }
+        assertTrue(EpgFetcher.isBlocked(url, t))
+        EpgFetcher.purgeUrls(listOf(url))
+        assertFalse(EpgFetcher.isBlocked(url, t))
+        // 清掉后失败计数也归零：再 fail 4 次仍不封。
+        repeat(4) { EpgFetcher.recordDownloadFailure(url, t) }
+        assertFalse(EpgFetcher.isBlocked(url, t))
     }
 
     // v1.4.11 第 1 步：回落分层——本源命中不碰全局，本源空结果才试全局。

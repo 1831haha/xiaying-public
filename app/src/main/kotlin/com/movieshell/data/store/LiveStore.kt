@@ -233,7 +233,17 @@ object LiveStore {
     }
 
     fun removeSource(context: Context, url: String) {
-        val name = _sources.value.firstOrNull { it.url == url }?.name
+        val src = _sources.value.firstOrNull { it.url == url }
+        val name = src?.name
+        // v1.4.34 B-P1-11：删源同步清 EPG 熔断残留——该源频道 epg/列表
+        // x-tvg-url/订阅级地址，删源前先收（删完频道就找不到了）。
+        if (name != null) {
+            val epgUrls = _channels.value
+                .filter { it.sourceKey == "m3u:$name" }
+                .flatMap { listOf(it.epgUrl, it.playlistEpgUrl) }
+                .filter { it.isNotBlank() } + listOfNotNull(src?.epg?.takeIf { it.isNotBlank() })
+            EpgFetcher.purgeUrls(epgUrls)
+        }
         _sources.value = _sources.value.filterNot { it.url == url }
         persistSources(context)
         // v0.218.0（S11）：删源即清掉该源频道并重写缓存——原来只删
@@ -284,6 +294,10 @@ object LiveStore {
     }
 
     fun removeManual(context: Context, id: String) {
+        // v1.4.34 B-P1-11：同 removeSource，删手动频道也清其 EPG 熔断残留。
+        _channels.value.firstOrNull { it.id == id }?.let { ch ->
+            EpgFetcher.purgeUrls(listOf(ch.epgUrl, ch.playlistEpgUrl).filter { it.isNotBlank() })
+        }
         persistManual(context, readManual(context).filterNot { it.id == id })
         // v0.218.0（S11）：同 removeSource，手动频道删除也同步清内存与盘上缓存。
         _channels.value = _channels.value.filterNot { it.id == id }
@@ -698,7 +712,10 @@ object LiveStore {
         if (lines.none { it.startsWith("#EXTM3U") } && lines.none { it.startsWith("#EXTINF") }) {
             return parseTxt(lines, sourceKey)
         }
-        val playlistEpg = lines.firstOrNull()?.let { h ->
+        // v1.4.34 B-P1-5：x-tvg-url 从 #EXTM3U 头行解析，不再取文件第一行——
+        // 头行之前可能有注释行/空行（空行已滤掉，注释行还在），第一行未必是头行。
+        // 无 #EXTM3U 头时（如只有 #EXTINF 的文件）列表级 EPG 为空，符合预期。
+        val playlistEpg = lines.firstOrNull { it.startsWith("#EXTM3U") }?.let { h ->
             attrRe.findAll(h).firstOrNull { it.groupValues[1] == "x-tvg-url" }
                 ?.groupValues?.get(2).orEmpty()
         }.orEmpty()

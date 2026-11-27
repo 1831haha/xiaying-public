@@ -156,6 +156,20 @@ class LiveStoreTest {
     }
 
     @Test
+    fun `parseM3u reads x-tvg-url from EXTM3U header even when not first line`() {
+        // v1.4.34 B-P1-5：头行之前有注释行时，仍从 #EXTM3U 行取 x-tvg-url，不取第一行。
+        val text = """
+            #EXTGRP:央视
+            #EXTM3U x-tvg-url="https://example.com/list.xml"
+            #EXTINF:-1,CCTV-1
+            http://x/1.m3u8
+        """.trimIndent()
+        val list = LiveStore.parseM3u(text, "m3u:央视")
+        assertEquals(1, list.size)
+        assertEquals("https://example.com/list.xml", list[0].playlistEpgUrl)
+    }
+
+    @Test
     fun `parseM3u without playlist header leaves playlist blank`() {
         val text = """
             #EXTINF:-1,CCTV-1
