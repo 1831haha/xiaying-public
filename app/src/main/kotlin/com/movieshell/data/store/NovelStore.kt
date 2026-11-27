@@ -219,15 +219,25 @@ object NovelStore {
         }.getOrDefault(emptyList())
     }
 
+    // v1.4.34 D-P2-8：上次写盘的索引字节（去重用）——内容不变时跳过全量重写。
+    // 索引只是 Novel 元信息数组，本身不大；但 markDirectoryState / 更新进度
+    // 这类高频入口每次都全量序列化 + 原子写盘。字节相同即磁盘已有同样内容，
+    // 跳过是安全的（本进程是唯一写盘方；外部改动会使下次序列化结果不同，
+    // 不会误跳）。调用方都在 indexMutex 内，无竞态。
+    @Volatile
+    private var lastWrittenIndexJson: String? = null
+
     // v0.246.0：返回写盘成败——原来返回 Unit、失败只记日志，
     // removeNovel 无法知道索引写没写成，照样删章节文件，书还在、章节先没了。
     private fun writeIndex(context: Context, list: List<Novel>): Boolean {
         return runCatching {
+            val text = json.encodeToString(ListSerializer(Novel.serializer()), list)
+            // v1.4.34 D-P2-8：与上次写盘字节相同直接返回成功，不重写磁盘。
+            if (text == lastWrittenIndexJson) return@runCatching true
             // v0.170.0：原子写盘
-            AtomicFile.writeText(
-                indexFile(context),
-                json.encodeToString(ListSerializer(Novel.serializer()), list),
-            )
+            if (!AtomicFile.writeText(indexFile(context), text)) return@runCatching false
+            lastWrittenIndexJson = text
+            true
         }.onFailure { Log.w(TAG, "书架索引写入失败", it) }.getOrDefault(false)
     }
 
@@ -704,6 +714,9 @@ object NovelStore {
                 val list = json.decodeFromString(ListSerializer(Chapter.serializer()), f.readText())
                 val target = list.filterNot { isNavChapterTitle(it.title) }.getOrNull(index)
                     ?: return@runCatching
+                // v1.4.34 D-P2-8：正文没变不重写整份章节文件——阅读器每次
+                // 打开已缓存章节都会调一次这里，原来无条件全量重写。
+                if (target.content == content) return@runCatching
                 val updated = list.map { if (it.index == target.index) it.copy(content = content) else it }
                 // v0.170.0：原子写盘
                 AtomicFile.writeText(
@@ -740,6 +753,8 @@ object NovelStore {
                 }
                 if (byRawIndex.isEmpty()) return@runCatching 0
                 val updated = list.map { c -> byRawIndex[c.index]?.let { c.copy(content = it) } ?: c }
+                // v1.4.34 D-P2-8：内容没变不重写整份章节文件（整本缓存重跑时常见）。
+                if (updated == list) return@runCatching byRawIndex.size
                 AtomicFile.writeText(f, json.encodeToString(ListSerializer(Chapter.serializer()), updated))
                 byRawIndex.size
             }.onFailure { Log.w(TAG, "批量正文缓存失败", it) }.getOrDefault(0)
