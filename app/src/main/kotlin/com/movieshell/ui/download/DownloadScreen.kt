@@ -448,7 +448,7 @@ private fun statusText(task: DownloadTask): String = when (task.status) {
     }
     DlStatus.QUEUED -> "排队等待"
     DlStatus.PAUSED -> "已暂停（${(task.progress * 100).toInt()}%）"
-    DlStatus.FAILED -> "失败：${task.error.ifBlank { "未知错误" }}，点▶重试"
+    DlStatus.FAILED -> "失败：${task.error.ifBlank { "未知错误" }}，点重试"
     DlStatus.DONE -> "已完成"
     else -> task.status
 }

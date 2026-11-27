@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v1.4.32：深色窗口背景取深色主题背景 #19120C（与浅色 #FFF8F5 配对）。 -->
+    <color name="window_background">#19120C</color>
+</resources>

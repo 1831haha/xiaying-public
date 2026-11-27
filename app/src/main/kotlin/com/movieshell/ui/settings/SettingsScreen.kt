@@ -938,7 +938,7 @@ internal fun SegItem(
                     .background(cs.primaryContainer),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(icon, null, tint = cs.onPrimaryContainer, modifier = Modifier.size(22.dp))
+                Icon(icon, null, tint = cs.onPrimaryContainer, modifier = Modifier.size(24.dp))
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {

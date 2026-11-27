@@ -1233,7 +1233,7 @@ private fun FavTab() {
                     kind = EmptyKind.Empty,
                     icon = Icons.Filled.Favorite,
                     title = "还没有收藏",
-                    hint = "在在线搜索结果上点 ♥ 收藏歌曲",
+                    hint = "在在线搜索结果上点爱心图标收藏歌曲",
                 )
             }
         } else {
@@ -1346,7 +1346,7 @@ internal fun TrackRow(
             .padding(start = V5.Gutter, end = 4.dp),
     ) {
         Row(
-            modifier = Modifier.padding(vertical = 7.dp),
+            modifier = Modifier.padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (artUrl.isNotBlank()) {

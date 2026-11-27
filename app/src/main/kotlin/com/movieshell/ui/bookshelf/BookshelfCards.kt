@@ -155,7 +155,7 @@ fun NovelListCard(
             .border(1.dp, p.glassStroke.copy(alpha = p.glassStroke.alpha * 0.6f), shape)
             .novelClickable(kind = NovelMotion.Press.CARD, onLongClick = onLongClick, onClick = onClick)
             // 行内边距【自定 9dp，与发现书卡左右内边距同档】
-            .padding(horizontal = 9.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selectionMode) {
@@ -345,7 +345,7 @@ fun NovelGridCard(
                         .align(Alignment.TopStart)
                         .padding(6.dp)
                         .background(bg, RoundedCornerShape(50))
-                        .padding(horizontal = 7.dp, vertical = 1.dp),
+                        .padding(horizontal = 8.dp, vertical = 1.dp),
                 )
             }
             // 正在检查更新：整张封面浅色蒙层 + 小转圈（不再是黑圆底）

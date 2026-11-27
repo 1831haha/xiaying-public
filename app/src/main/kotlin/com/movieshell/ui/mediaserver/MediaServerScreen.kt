@@ -896,7 +896,7 @@ private fun SectionHeader(title: String, count: Int) {
         Box(
             Modifier.clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                .padding(horizontal = 7.dp, vertical = 2.dp),
+                .padding(horizontal = 8.dp, vertical = 2.dp),
         ) {
             Text(
                 "$count",

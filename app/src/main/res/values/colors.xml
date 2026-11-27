@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v1.4.32：窗口背景跟随日夜（浅色取浅色主题背景 #FFF8F5），修浅色模式黑闪；
+         深色值在 values-night/colors.xml。 -->
+    <color name="window_background">#FFF8F5</color>
+</resources>

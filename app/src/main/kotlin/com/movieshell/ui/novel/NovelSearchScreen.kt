@@ -624,7 +624,7 @@ private fun SearchViewCapsule(
             .clip(RoundedCornerShape(50))
             .background(bg)
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
     )
 }
 

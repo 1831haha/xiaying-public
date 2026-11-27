@@ -2400,7 +2400,7 @@ fun PlayerScreen(
                         RoundedCornerShape(V5.CornerMd),
                     )
                     // v0.294.21：指示胶囊收小
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Text(hint, color = Color.White, style = MaterialTheme.typography.bodySmall)
             }

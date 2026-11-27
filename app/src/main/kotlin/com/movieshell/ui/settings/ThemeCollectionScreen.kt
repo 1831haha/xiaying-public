@@ -26,7 +26,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material3.Button
@@ -163,12 +165,20 @@ fun ThemeCollectionScreen(onBack: () -> Unit) {
                             },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f).height(40.dp),
-                        ) { Text("✦ 保存当前观感") }
+                        ) {
+                            Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("保存当前观感")
+                        }
                         OutlinedButton(
                             onClick = { jsonPicker.launch("application/json") },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f).height(40.dp),
-                        ) { Text("↓ 导入主题") }
+                        ) {
+                            Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("导入主题")
+                        }
                     }
                 }
                 item {
@@ -331,7 +341,7 @@ private fun CollectionCaption(text: String) {
         text = text,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, top = 22.dp, bottom = 8.dp),
+        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp),
     )
 }
 
@@ -357,12 +367,12 @@ private fun ThemeStripCard(
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .clip(RoundedCornerShape(9.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(Brush.linearGradient(theme.gradient.map { Color(it) })),
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(9.dp, 10.dp)
+                        .padding(8.dp, 10.dp)
                         .fillMaxSize()
                         .clip(RoundedCornerShape(3.dp))
                         .background(Color.White.copy(alpha = 0.85f)),
@@ -413,7 +423,7 @@ private fun BgTile(
         ) {
             image()
         }
-        Text(name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 7.dp))
+        Text(name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
         Text(sub, style = MaterialTheme.typography.bodySmall, fontSize = 11.sp, color = cs.onSurfaceVariant)
     }
 }

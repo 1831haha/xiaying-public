@@ -1069,7 +1069,7 @@ private fun GroupChip(
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

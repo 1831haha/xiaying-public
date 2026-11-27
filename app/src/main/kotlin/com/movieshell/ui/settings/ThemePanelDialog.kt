@@ -108,7 +108,7 @@ internal fun ThemePanelDialog(onDismiss: () -> Unit) {
                                     .background(cs.surfaceContainerHighest),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Icon(Icons.Outlined.Wallpaper, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                                Icon(Icons.Outlined.Wallpaper, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
                             }
                         }
                     }
