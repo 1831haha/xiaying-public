@@ -16,6 +16,11 @@ class MagnetService : Service() {
     override fun onCreate() {
         super.onCreate()
         // v0.294.38：前台服务 + 通知，切到后台 / 画中画时系统不回收磁力进程
+        // v1.4.34 B-P1-12：前台类型由 dataSync 改 mediaPlayback——API 34+
+        // dataSync 类型最长只跑 6 小时，长片“边下边播”会被系统停服；
+        // mediaPlayback 无此时限，且本服务本就为播放供流（边下边播），类型
+        // 与用途一致。权限 FOREGROUND_SERVICE_MEDIA_PLAYBACK 早已为音乐
+        // 服务声明（Manifest），通知渠道与 1.4.33 的失败处理原样不动。
         // v1.4.33：startForeground 失败不再只记日志——失败时服务若还活着，
         // 系统会在 5 秒内以 RemoteServiceException 杀掉 :magnet 进程，
         // 磁力“边下边播”直接断。失败时立刻把原因写进端口文件（主进程
@@ -36,7 +41,7 @@ class MagnetService : Service() {
                 .setContentIntent(com.movieshell.data.download.Notify.routeIntent(this, "home", id = 9101))
                 .build()
             if (android.os.Build.VERSION.SDK_INT >= 29) {
-                startForeground(9101, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                startForeground(9101, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
             } else startForeground(9101, n)
         }.onFailure { LogBus.w("XiaYingMagnet", "磁力前台服务启动失败：${it.message}") }.exceptionOrNull()
         if (foregroundError != null) {

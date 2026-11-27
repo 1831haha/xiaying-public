@@ -160,11 +160,18 @@ object NovelUpdateChecker {
         return NovelTocService.fetchChapters(engine, novel.sourceKey, best).ifEmpty { null }
     }
 
-    /** 选最像的一条：标题完全一致且作者对得上优先，其次标题完全一致，
-     *  其次标题互相包含且作者对得上，其次标题互相包含。
+    /** 选最像的一条：标题完全一致且作者对得上优先，其次去括号/空白后标题
+     *  一致且作者对得上。
      *  v0.211.0 审计修复：原来最后兜底取第一条，同名/近似书会把
-     *  别本书的目录整本写进本地书且不可逆——宁可判失败也不写错书。 */
-    private fun pickBest(
+     *  别本书的目录整本写进本地书且不可逆——宁可判失败也不写错书。
+     *  v1.4.34 B-P1-6：第 2 档也加作者校验——同名不同作者的书只凭标题
+     *  完全一致也会认错；作者任一侧空白仍放行（authorOk 的既有口径），
+     *  只有双方作者都已知且互不包含时才拒绝，拒绝即判失败不写错书。
+     *  另：原第 3/4 档“标题互相 contains”已删——单测证明光加作者校验不够：
+     *  同作者续作（“斗破苍穹续”）照样被 contains 认成同一本。contains
+     *  只容忍括号/空白类缀余（“斗破苍穹（完结）”），缀余之外多一个字
+     *  都是另一本书；容忍面收窄到归一化后精确一致，漏报（判失败）优于错写。 */
+    internal fun pickBest(
         hits: List<NovelSearchResult>,
         title: String,
         author: String = "",
@@ -176,9 +183,18 @@ object NovelUpdateChecker {
             a.isBlank() || hit.author.isNullOrBlank() ||
                 hit.author!!.contains(a) || a.contains(hit.author!!)
         }
+        val nt = normalizeTitleForMatch(t)
         return hits.firstOrNull { it.title.trim() == t && authorOk(it) }
-            ?: hits.firstOrNull { it.title.trim() == t }
-            ?: hits.firstOrNull { (it.title.contains(t) || t.contains(it.title)) && authorOk(it) }
-            ?: hits.firstOrNull { it.title.contains(t) || t.contains(it.title) }
+            ?: hits.firstOrNull {
+                nt.isNotEmpty() && normalizeTitleForMatch(it.title) == nt && authorOk(it)
+            }
     }
+
+    /**
+     * v1.4.34 B-P1-6：匹配用标题归一化——去括号段（圆/方括号，中英文皆算）
+     * 与全部空白；《》是书名号本身，不去。括号不嵌套，标题场景够用。
+     */
+    private fun normalizeTitleForMatch(s: String): String =
+        s.replace(Regex("""\([^)]*\)|（[^）]*）|\[[^\]]*\]|【[^】]*】"""), "")
+            .replace(Regex("\\s+"), "")
 }

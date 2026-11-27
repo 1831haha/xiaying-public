@@ -739,7 +739,13 @@ class DownloadQueueWorker(
     // v0.247.0（DS12 复核）：.part 落盘收尾——不再先删目标再改名（改名失败
     // 时旧目标已丢）；改走 AtomicFile 备份替换：旧目标先改名备份，落位成功
     // 后清备份，落位失败恢复旧目标；任一步失败都抛错且留着 .part 续传。
-    private fun finishPart(part: File, dst: File) {
+    // v1.4.34 B-P1-1：落盘失败重试 1 次——改名失败多为瞬时文件锁，
+    // 直接抛错会让外层整任务重下（downloadTask 最多 3 次全量重下）；
+    // 重试仍失败才抛错，.part 保留可续传。重试 1 次封顶，不无限。
+    private suspend fun finishPart(part: File, dst: File) {
+        if (AtomicFile.replaceFile(part, dst)) return
+        Log.w(TAG, "文件落盘失败，重试 1 次：${dst.name}")
+        kotlinx.coroutines.delay(300)
         if (!AtomicFile.replaceFile(part, dst)) throw IllegalStateException("文件落盘失败：${dst.name}")
     }
 
@@ -761,7 +767,7 @@ class DownloadQueueWorker(
      * 下次调用时 .part 在则续传，不在则重下。aliveCheck 在 64KB 块边界查，
      * 暂停/删除后最多一个块即停，不再把整段写完才响应。
      */
-    private fun downloadTo(
+    private suspend fun downloadTo(
         url: String,
         dst: File,
         headers: Map<String, String>,
@@ -775,6 +781,18 @@ class DownloadQueueWorker(
         http.newCall(reqB.build()).execute().use { resp ->
             if (!resp.isSuccessful && resp.code != 206) throw IllegalStateException("HTTP ${resp.code}")
             val body = resp.body ?: throw IllegalStateException("空响应")
+            // v1.4.34 B-P1-1：分片续传同样核对 206 Content-Range 起始字节，
+            // 与 downloadFile 同口径（v0.247.0 DS11）：错位 206 绝不续写；
+            // 删 part 后抛错，外层 downloadTask 重试时从头下该分片。
+            if (resp.code == 206) {
+                val crStart = resp.header("Content-Range")
+                    ?.let { Regex("""bytes (\d+)-""").find(it)?.groupValues?.get(1)?.toLongOrNull() }
+                if (crStart != null && crStart != start) {
+                    Log.w(TAG, "分片续传起始字节不符（要 $start，给 $crStart），删断点重下：$url")
+                    part.delete()
+                    throw IllegalStateException("分片续传起始字节不符：$url")
+                }
+            }
             if (resp.code != 206 && start > 0) {
                 part.delete()
                 start = 0

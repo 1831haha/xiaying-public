@@ -41,6 +41,11 @@ object EpubImporter {
 
     private data class ManifestItem(val href: String, val mediaType: String, val properties: String)
 
+    // v1.4.34 B-P1-4：单条目上限 20MB、整本解压总量上限 200MB（防 zip 炸弹）。
+    // 章节 XHTML 极少超 1MB，封面图亦然；200MB 总量远超合法 EPUB 体积。
+    private const val MAX_EPUB_ENTRY_BYTES = 20L * 1024 * 1024
+    private const val MAX_EPUB_TOTAL_BYTES = 200L * 1024 * 1024
+
     /**
      * @param coversDir 封面落盘目录（UI 传 File(context.filesDir, "epub_covers")）；null 表示不存封面。
      * @return 解析失败（找不到 container/OPF、spine 为空、全章空白等）返回 null。
@@ -50,14 +55,17 @@ object EpubImporter {
         try {
             val novelId = UUID.randomUUID().toString().replace("-", "")
             ZipFile(file).use { zip ->
-                val container = readEntry(zip, "META-INF/container.xml") ?: return null
+                // v1.4.34 B-P1-4：整本解压预算（剩余字节），各条目读完扣减；
+                // 扣成负数说明总量超限，章循环后整本导入失败（见下）。
+                val budgetLeft = longArrayOf(MAX_EPUB_TOTAL_BYTES)
+                val container = readEntry(zip, "META-INF/container.xml", budgetLeft) ?: return null
                 val containerDoc = parseXml(container) ?: return null
                 val rootfile = containerDoc.documentElement.descendants("rootfile")
                     .firstOrNull { it.getAttribute("media-type") == "application/oebps-package+xml" }
                     ?: containerDoc.documentElement.descendants("rootfile").firstOrNull()
                     ?: return null
                 val opfPath = rootfile.getAttribute("full-path").ifBlank { return null }
-                val opfBytes = readEntry(zip, opfPath) ?: return null
+                val opfBytes = readEntry(zip, opfPath, budgetLeft) ?: return null
                 val opfDoc = parseXml(opfBytes) ?: return null
                 val opfDir = opfPath.substringBeforeLast('/', "")
 
@@ -93,7 +101,7 @@ object EpubImporter {
                     if (item.mediaType == "application/x-dtbncx+xml") return@forEachIndexed
                     if (item.properties.split(' ', '\t').any { it == "nav" }) return@forEachIndexed
                     val path = resolveZipPath(opfDir, item.href)
-                    val xhtmlBytes = readEntry(zip, path) ?: return@forEachIndexed
+                    val xhtmlBytes = readEntry(zip, path, budgetLeft) ?: return@forEachIndexed
                     val xhtml = runCatching { String(xhtmlBytes, Charsets.UTF_8) }.getOrNull()
                         ?: return@forEachIndexed
                     val chapterTitle = chapterTitle(xhtml, spineIndex + 1)
@@ -107,11 +115,14 @@ object EpubImporter {
                     )
                 }
                 if (chapters.isEmpty()) return null
+                // v1.4.34 B-P1-4：总量超限（预算扣成负数）整本失败，不留半本——
+                // 预算只在 zip 炸弹时耗尽，合法 EPUB 远到不了 200MB。
+                if (budgetLeft[0] < 0) return null
 
                 var cover: String? = null
                 val coverItem = coverId?.let { manifest[it] }
                 if (coverItem != null && coversDir != null) {
-                    val coverBytes = readEntry(zip, resolveZipPath(opfDir, coverItem.href))
+                    val coverBytes = readEntry(zip, resolveZipPath(opfDir, coverItem.href), budgetLeft)
                     if (coverBytes != null) {
                         val ext = coverItem.href.substringAfterLast('/')
                             .substringAfterLast('.', "").lowercase()
@@ -154,12 +165,19 @@ object EpubImporter {
         return "第${spineNumber}章"
     }
 
-    /** 先原样匹配 zip 条目，失败再 URLDecoder 解码一次（href 里的 %20 与 zip 真名可能不一致）。 */
-    private fun readEntry(zip: ZipFile, path: String): ByteArray? {
+    /** 先原样匹配 zip 条目，失败再 URLDecoder 解码一次（href 里的 %20 与 zip 真名可能不一致）。
+     * v1.4.34 B-P1-4：流式限量读（单条目上限）+ 总量预算扣减；声明 size 超限直接拒
+     * （size=-1 表未知时不拒，靠流内计数兜底）；超限返回 null（调用方按缺章处理）。 */
+    private fun readEntry(zip: ZipFile, path: String, budgetLeft: LongArray? = null): ByteArray? {
         val entry = zip.getEntry(path)
             ?: runCatching { zip.getEntry(URLDecoder.decode(path, "UTF-8")) }.getOrNull()
             ?: return null
-        return runCatching { zip.getInputStream(entry).use { it.readBytes() } }.getOrNull()
+        if (entry.size > MAX_EPUB_ENTRY_BYTES) return null
+        val bytes = runCatching {
+            zip.getInputStream(entry).use { readBytesCapped(it, MAX_EPUB_ENTRY_BYTES) }
+        }.getOrNull() ?: return null
+        if (budgetLeft != null) budgetLeft[0] -= bytes.size
+        return bytes
     }
 
     /** OPF 相对路径按 OPF 所在目录解析归一化（处理 ../ 与子目录；前导 / 视为 zip 根）。 */
