@@ -3,11 +3,18 @@
 <!-- v0.188.0（M31 收窄）：不再 blanket 暴露整个 xiaying/ 根——FileProvider 实际只 -->
 <!-- 分享预览页的四类源文件（js/py/php/web，含各自 subs 子目录），其余子目录 -->
 <!-- （plugins/、service/、Download/、backup/、log/、crash/ 等）不再授权。 -->
+<!-- v1.4.34 A组 P1-03：补两条——① files-path xiaying/：无存储权限时规则 -->
+<!-- 目录回退到 filesDir/xiaying/，原来不在白名单里，getUriForFile 直接抛 -->
+<!-- IllegalArgumentException，编辑/分享失败；② external-path webparse/： -->
+<!-- 预览页 kind 白名单里有 webparse（见 FilePreviewScreen.previewKindDir）， -->
+<!-- 公开目录侧原来也漏了它，同样分享不出去。 -->
 <paths>
     <external-path name="xiaying_js" path="xiaying/js/" />
     <external-path name="xiaying_py" path="xiaying/py/" />
     <external-path name="xiaying_web" path="xiaying/web/" />
     <external-path name="xiaying_php" path="xiaying/php/" />
+    <external-path name="xiaying_webparse" path="xiaying/webparse/" />
+    <files-path name="private_xiaying" path="xiaying/" />
     <!-- v0.25.0：崩溃日志 zip（cacheDir）分享用 -->
     <!-- v1.3.33 B-P2-11：CrashHandler.exportZip 已删（设置页导出崩溃日志入口早已 -->
     <!-- 撤掉，生产+单测零调用）；cache-path 暂留原样，不收窄、不动。 -->
