@@ -155,7 +155,7 @@ fun NovelListCard(
             .border(1.dp, p.glassStroke.copy(alpha = p.glassStroke.alpha * 0.6f), shape)
             .novelClickable(kind = NovelMotion.Press.CARD, onLongClick = onLongClick, onClick = onClick)
             // 行内边距【自定 9dp，与发现书卡左右内边距同档】
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selectionMode) {

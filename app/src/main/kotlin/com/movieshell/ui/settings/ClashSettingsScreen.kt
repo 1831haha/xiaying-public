@@ -652,6 +652,6 @@ private fun ClashCaption(text: String) {
         text = text,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp),
+        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp),
     )
 }

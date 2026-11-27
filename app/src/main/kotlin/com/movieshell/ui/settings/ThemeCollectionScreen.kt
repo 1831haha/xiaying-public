@@ -27,6 +27,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Share
@@ -168,7 +169,7 @@ fun ThemeCollectionScreen(onBack: () -> Unit) {
                         ) {
                             Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("保存当前观感")
+                            Text("保存当前观感", maxLines = 1)
                         }
                         OutlinedButton(
                             onClick = { jsonPicker.launch("application/json") },
@@ -177,7 +178,7 @@ fun ThemeCollectionScreen(onBack: () -> Unit) {
                         ) {
                             Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("导入主题")
+                            Text("导入主题", maxLines = 1)
                         }
                     }
                 }
@@ -341,7 +342,7 @@ private fun CollectionCaption(text: String) {
         text = text,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp),
+        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp),
     )
 }
 
@@ -396,7 +397,7 @@ private fun ThemeStripCard(
                 }
                 Text(theme.desc, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             }
-            Text("›", style = MaterialTheme.typography.titleLarge, color = cs.outline)
+            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = cs.outline)
         }
     }
 }

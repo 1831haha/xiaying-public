@@ -15,14 +15,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,6 +40,8 @@ import com.movieshell.ui.theme.LocalBrandGradient
  * v1.4.32：亮弧改品牌渐变（跟主题走的 LocalBrandGradient，不写死颜色）——
  * 1.4.30 的小说绿 #1A8B5C 与 StatusRing 的“可用”绿撞色，加载中与可用同屏
  * 分不清；渐变只表达“正在加载”，不表达状态。
+ * v1.4.32 TA 必修 Y2：浅色下炫彩渐变对比度不够（mint #76FF03 对 #FFF8F5
+ * 约 1.2:1，绿约 4.1:1）——浅色时渐变色向 onSurface 混 0.35，保色相提对比。
  *
  * 与 StatusRing 的分工：StatusRing 是状态指示（颜色语义：绿就绪/琥珀加载中/
  * 红失败/灰未选，带中央点），首页源标签 14dp 与服务插件页服务状态仍走它，
@@ -47,10 +55,23 @@ fun LoadingRing(
     strokeWidth: Dp? = null,
     caption: String? = null,
 ) {
+    val scheme = MaterialTheme.colorScheme
     val brandColors = LocalBrandGradient.current
+    // 浅色时把渐变色向 onSurface 混 0.35（见 KDoc Y2）；深色下亮色对深底够用，不动。
+    val mixedColors = if (scheme.background.luminance() > 0.5f) {
+        brandColors.map { lerp(it, scheme.onSurface, 0.35f) }
+    } else {
+        brandColors
+    }
     // sweep 渐变要首尾闭合（末尾补回首色），亮弧转过一圈颜色才不断档。
-    val ringColors = brandColors + brandColors.first()
-    val trackColor = brandColors.first().copy(alpha = 0.15f)
+    val ringColors = mixedColors + mixedColors.first()
+    val trackColor = mixedColors.first().copy(alpha = 0.15f)
+    // v1.4.32 S1：brush 只建一次——写在 draw lambda 里动画每帧都会重建 SweepGradient。
+    // 内外圈同心（内环中心 == 画布中心），一把刷子够用。
+    val diameterPx = with(LocalDensity.current) { diameter.toPx() }
+    val ringBrush = remember(ringColors, diameterPx) {
+        Brush.sweepGradient(ringColors, center = Offset(diameterPx / 2f, diameterPx / 2f))
+    }
     val transition = rememberInfiniteTransition(label = "loadingRing")
     val angle by transition.animateFloat(
         initialValue = 0f,
@@ -63,12 +84,13 @@ fun LoadingRing(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
-            modifier = Modifier.size(diameter),
+            modifier = Modifier
+                .size(diameter)
+                .semantics { progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate },
             contentAlignment = Alignment.Center,
         ) {
             Canvas(modifier = Modifier.size(diameter)) {
                 val w = strokeWidth?.toPx() ?: size.minDimension * 0.07f
-                val outerBrush = Brush.sweepGradient(ringColors, center = Offset(size.width / 2f, size.height / 2f))
                 // 外圈：淡轨整圆＋亮弧顺时针。
                 drawArc(
                     color = trackColor,
@@ -78,7 +100,7 @@ fun LoadingRing(
                     style = Stroke(width = w),
                 )
                 drawArc(
-                    brush = outerBrush,
+                    brush = ringBrush,
                     startAngle = angle,
                     sweepAngle = 160f,
                     useCenter = false,
@@ -87,8 +109,6 @@ fun LoadingRing(
                 // 内圈：淡轨整圆＋亮弧逆时针，半径缩进 20%。
                 val inset = size.minDimension * 0.20f
                 val innerSize = Size(size.width - inset * 2f, size.height - inset * 2f)
-                val innerCenter = Offset(inset + innerSize.width / 2f, inset + innerSize.height / 2f)
-                val innerBrush = Brush.sweepGradient(ringColors, center = innerCenter)
                 drawArc(
                     color = trackColor,
                     startAngle = 0f,
@@ -99,7 +119,7 @@ fun LoadingRing(
                     style = Stroke(width = w),
                 )
                 drawArc(
-                    brush = innerBrush,
+                    brush = ringBrush,
                     startAngle = -angle,
                     sweepAngle = 120f,
                     useCenter = false,

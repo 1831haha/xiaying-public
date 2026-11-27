@@ -163,6 +163,16 @@ object ThemeStore {
     private fun presetOf(id: String?): GradientPreset? =
         id?.let { want -> GRADIENT_OPTIONS.firstOrNull { it.id == want } }
 
+    /**
+     * v1.4.32 Y1：同步读回保存的模式（MainActivity.attachBaseContext 用——
+     * 启动窗口取色时 Flow 还没起来，只能同步读 prefs；与 init() 同一口径）。
+     */
+    fun readSavedMode(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_MODE, MODE_SYSTEM)
+            .takeIf { it == MODE_DARK || it == MODE_LIGHT || it == MODE_SYSTEM }
+            ?: MODE_SYSTEM
+
     /** 启动时读回上次保存的模式和主题；未知值回退默认。 */
     fun init(context: Context) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -171,9 +181,7 @@ object ThemeStore {
         // 拿到 经典暗色；显式选过亮色/跟随系统的（存了值）原样保留，不强制迁移。
         // v1.1.12：默认改回 跟随系统——没显式存过模式的（新装、一直用默认的）
         // 拿到 跟随系统；显式选过深色/浅色/跟随系统的（存了值）原样保留，不强制迁移。
-        val saved = prefs.getString(KEY_MODE, MODE_SYSTEM)
-            .takeIf { it == MODE_DARK || it == MODE_LIGHT || it == MODE_SYSTEM }
-            ?: MODE_SYSTEM
+        val saved = readSavedMode(context)
         _mode.value = saved
         val savedGradient = prefs.getString(KEY_GRADIENT, null)
         val preset = presetOf(savedGradient)

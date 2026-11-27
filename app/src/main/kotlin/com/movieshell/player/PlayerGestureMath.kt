@@ -40,7 +40,7 @@ object PlayerGestureMath {
         else String.format(Locale.US, "%02d:%02d", s / 60, s % 60)
     }
 
-    /** 拖动提示：「» 12:30 / 45:00（+1:20）」。 */
+    /** 拖动提示：「» 12:30 / 45:00（+1:20）」。»/« 是排版方向符号，豁免字形图标规则（1.4.32 TA 审码）。 */
     fun scrubHint(startMs: Long, targetMs: Long, durationMs: Long): String {
         val d = targetMs - startMs
         val arrow = if (d >= 0) "»" else "«"

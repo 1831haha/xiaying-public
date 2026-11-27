@@ -3245,6 +3245,7 @@ private fun ReviewCard(review: DoubanReview) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            // ★/☆ 是五星评分惯例表达，换图标会挤行高，豁免字形图标规则（1.4.32 TA 审码）。
             if (filled > 0) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(

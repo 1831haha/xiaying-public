@@ -2258,7 +2258,7 @@ fun PlayerScreen(
                                 // 进度条与时间跟手，松手才真正 seek，并恢复原倍速
                                 EngineHost.setPlaybackSpeed(PlayerGestureMath.BOOST_SPEED)
                                 try {
-                                    uiVm.gestureHint = "3X 快进中 ▶▶  左右拖动调进度"
+                                    uiVm.gestureHint = "3X 快进中 ▶▶  左右拖动调进度" // ▶▶ 是排版符号，豁免（1.4.32 TA 审码）
                                     val startMs = EngineHost.currentPosition()
                                     val durMs = EngineHost.duration()
                                     val slopPx = viewConfiguration.touchSlop * 2
@@ -2344,7 +2344,7 @@ fun PlayerScreen(
                                                     .coerceIn(0L, end)
                                             )
                                             uiVm.gestureHint =
-                                                if (dir > 0) "快进 10 秒 »" else "« 快退 10 秒"
+                                                if (dir > 0) "快进 10 秒 »" else "« 快退 10 秒" // »/« 是排版符号，豁免（1.4.32 TA 审码）
                                         }
                                     }
                                 }

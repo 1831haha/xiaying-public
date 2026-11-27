@@ -19,8 +19,10 @@ import com.movieshell.ui.sources.importTargetForFileName
 import com.movieshell.ui.components.AppToast
 import com.movieshell.ui.components.AppToastOverlay
 import android.os.Bundle
+import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
 import android.view.KeyEvent
 import com.movieshell.ui.music.PlayerSystemBars
 import com.movieshell.ui.reader.ReaderSystemBars
@@ -196,6 +198,22 @@ class MainActivity : ComponentActivity() {
         }
         // 消费后清掉 action，同一 Intent 对象再投递时不再重放。
         intent.action = null
+    }
+
+    // v1.4.32 Y1：启动窗口按 App 内主题取日夜限定符——系统浅色＋App 内深色时，
+    // 只跟系统会取浅色窗口背景、内容却是深色，白闪比原来黑底更刺眼。
+    // 在 attachBaseContext 按保存的模式 override uiMode 的 night 位，启动窗口一起正确。
+    override fun attachBaseContext(newBase: Context) {
+        val mode = ThemeStore.readSavedMode(newBase)
+        if (mode == ThemeStore.MODE_SYSTEM) {
+            super.attachBaseContext(newBase)
+            return
+        }
+        val config = Configuration(newBase.resources.configuration)
+        val nightBit = if (mode == ThemeStore.MODE_DARK) Configuration.UI_MODE_NIGHT_YES
+            else Configuration.UI_MODE_NIGHT_NO
+        config.uiMode = (config.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightBit
+        super.attachBaseContext(newBase.createConfigurationContext(config))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -494,6 +512,9 @@ class MainActivity : ComponentActivity() {
                     w.statusBarColor = statusBg.toArgb()
                     @Suppress("DEPRECATION")
                     w.navigationBarColor = navBg.toArgb()
+                    // v1.4.32 Y1/S2：窗口底色跟当前色板走——换主题色/海报取色/系统取色时
+                    // background 不是 values 里的两个常量，启动窗口兜底之外这里再补一次。
+                    w.setBackgroundDrawable(ColorDrawable(sysScheme.background.toArgb()))
                     val light = statusBg.luminance() > 0.5f
                     androidx.core.view.WindowCompat.getInsetsController(w, w.decorView).apply {
                         isAppearanceLightStatusBars = light
