@@ -55,8 +55,12 @@ object SniffConfig {
     var sniffTimeoutMs: Long = 20_000L
         private set
 
-    /** v0.294.7：自动嗅探（type=0 解析线 / 规则页面嗅探）单条超时 */
-    var autoSniffTimeoutMs: Long = 15_000L
+    /** v0.294.7：自动嗅探（type=0 解析线 / 规则页面嗅探）单条超时。
+     * v1.4.34 D-P2-5：15 秒→10 秒——多站自动嗅探排队时单条 15 秒太长；
+     * 总耗时本就受 parseBudgetMs（30 秒，ParseApi.race 硬上限）约束，
+     * 这里只缩短单条上限，不动并发上限（后台 WebView 全局 2 个已是
+     * 内存与速度的折中，再放宽会多占 WebView 内存）。 */
+    var autoSniffTimeoutMs: Long = 10_000L
         private set
 
     /** v0.294.7（H3）：一次解析的总时间预算（全部线路并发合计）；v1.2.11：默认 45 秒→30 秒（设置里仍可改，10–180 秒） */
@@ -83,7 +87,7 @@ object SniffConfig {
             probeTimeoutMs = p.getLong(K_TIMEOUT, 5_000L).coerceIn(1_000L, 30_000L)
             adFilterEnabled = p.getBoolean(K_AD_FILTER, true)
             sniffTimeoutMs = p.getLong(K_SNIFF_TIMEOUT, 20_000L).coerceIn(5_000L, 120_000L)
-            autoSniffTimeoutMs = p.getLong(K_AUTO_SNIFF_TIMEOUT, 15_000L).coerceIn(5_000L, 60_000L)
+            autoSniffTimeoutMs = p.getLong(K_AUTO_SNIFF_TIMEOUT, 10_000L).coerceIn(5_000L, 60_000L)
             parseBudgetMs = p.getLong(K_PARSE_BUDGET, 30_000L).coerceIn(10_000L, 180_000L)
             uaMode = p.getInt(K_UA_MODE, UA_MOBILE).coerceIn(0, 1)
             loaded = true
