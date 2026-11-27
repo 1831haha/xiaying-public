@@ -23,7 +23,12 @@ import java.util.zip.ZipInputStream
  * SubHD 字幕源（v0.28.0，首版唯一写死源）。
  *
  * - 搜索：GET https://subhd.tv/search/{关键词}，HTML 直爬，无需登录。
- *   条目结构（2026-10 实测）：a[href='/a/{sid}'] 两个链接（标题 + 文件名），
+ *   v1.4.34 D-P2-11：站方首页自述“网站可能被墙，请记住以下域名：
+ *   subhd.me subhd.one”——2026-11-27 沙箱实测 subhd.tv / subhd.me /
+ *   subhd.one 及搜索接口均 HTTP 200；主域名失败时顺延备用域名，下载
+ *   沿用搜索命中的域名。assrt / OpenSubtitles 均需 key 或登录、字幕库
+ *   沙箱不可达，故不新增源，只给唯一免费源加备用域名。
+ * 条目结构（2026-10 实测）：a[href='/a/{sid}'] 两个链接（标题 + 文件名），
  *   语言 tag 在 span.p-1.fw-bold，格式在 span.p-1.text-secondary，
  *   大小/下载量在 span.align-text-top.me-3。
  * - 下载三步（站内 JS 流程）：POST /api/sub/prepare-download {sid}
@@ -34,7 +39,11 @@ object BuiltinSubHdSource : SubtitleSource {
     override val id = "subhd"
     override val name = "SubHD"
 
-    private const val BASE = "https://subhd.tv"
+    private val BASES = listOf("https://subhd.tv", "https://subhd.me", "https://subhd.one")
+
+    /** v1.4.34 D-P2-11：最近一次成功的域名（搜索命中后下载沿用它）。 */
+    @Volatile
+    private var lastWorkingBase: String = BASES[0]
     private const val MAX_BYTES = 5 * 1024 * 1024L
 
     private val jar = object : CookieJar {
@@ -69,10 +78,24 @@ object BuiltinSubHdSource : SubtitleSource {
         withContext(Dispatchers.IO) {
             withTimeout(10_000) {
                 val q = URLEncoder.encode(keyword.trim(), "UTF-8")
-                val html = get("$BASE/search/$q") ?: throw IllegalStateException("搜索请求失败")
+                val html = getFromAnyBase("/search/$q") ?: throw IllegalStateException("搜索请求失败")
                 parseSearch(html)
             }
         }
+
+    /** v1.4.34 D-P2-11：依次试各备用域名（上次成功的排第一），返回首个成功
+     * 拉到的正文；下载沿用本次命中的域名。 */
+    private fun getFromAnyBase(path: String): String? {
+        val ordered = listOf(lastWorkingBase) + BASES.filter { it != lastWorkingBase }
+        for (base in ordered) {
+            val html = runCatching { get("$base$path", referer = base) }.getOrNull()
+            if (html != null) {
+                lastWorkingBase = base
+                return html
+            }
+        }
+        return null
+    }
 
     private fun parseSearch(html: String): List<OnlineSubtitle> {
         // 按 sid 分组：同一条目有多段文本，拼起来找语言/格式/大小
@@ -100,20 +123,21 @@ object BuiltinSubHdSource : SubtitleSource {
     override suspend fun download(item: OnlineSubtitle): Pair<String, String> =
         withContext(Dispatchers.IO) {
             withTimeout(30_000) {
+                val base = lastWorkingBase
                 // 1. 准备下载
                 val prep = postJson(
-                    "$BASE/api/sub/prepare-download",
+                    "$base/api/sub/prepare-download",
                     JSONObject().put("sid", item.sid).toString(),
-                    referer = "$BASE/a/${item.sid}",
+                    referer = "$base/a/${item.sid}",
                 ) ?: throw IllegalStateException("准备下载失败")
                 val downPath = JSONObject(prep).optString("down_url", "/down/${item.sid}")
                 // 2. 拿放行 Cookie
-                get("$BASE$downPath", referer = "$BASE/a/${item.sid}")
+                get("$base$downPath", referer = "$base/a/${item.sid}")
                 // 3. 拿 CDN 直链
                 val downResp = postJson(
-                    "$BASE/api/sub/down",
+                    "$base/api/sub/down",
                     JSONObject().put("sid", item.sid).toString(),
-                    referer = "$BASE/a/${item.sid}",
+                    referer = "$base/a/${item.sid}",
                 ) ?: throw IllegalStateException("获取下载地址失败")
                 val fileUrl = JSONObject(downResp).optString("url")
                     .ifBlank { throw IllegalStateException("下载地址为空（可能需要解锁）") }
@@ -209,7 +233,7 @@ object BuiltinSubHdSource : SubtitleSource {
         return null
     }
 
-    private fun get(url: String, referer: String = BASE): String? {
+    private fun get(url: String, referer: String = lastWorkingBase): String? {
         val req = Request.Builder().url(url)
             .header("User-Agent", DEFAULT_UA_ANDROID10).header("Referer", referer).build()
         http.newCall(req).execute().use { resp ->
