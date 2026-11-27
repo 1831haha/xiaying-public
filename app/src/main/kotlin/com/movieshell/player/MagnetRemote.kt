@@ -41,8 +41,8 @@ object MagnetRemote {
             // v1.4.33 S9：走 startForegroundService——“5 秒内 RemoteServiceException
             // 被杀”这个前提只在它启动时成立；startService 不置 fgRequired，
             // 旧代码“只记日志继续跑”未必真会被杀。前置条件已齐：
-            // 清单里 MagnetService 声明了 foregroundServiceType="dataSync"、
-            // FOREGROUND_SERVICE 与 FOREGROUND_SERVICE_DATA_SYNC 权限；
+            // 清单里 MagnetService 声明了 foregroundServiceType="mediaPlayback"、
+            // FOREGROUND_SERVICE 与 FOREGROUND_SERVICE_MEDIA_PLAYBACK 权限；
             // 服务在 onCreate 内立即调 startForeground，5 秒时限内完成。
             // 后台拉起被拒时抛 ForegroundServiceStartNotAllowedException，
             // 由下方的 catch 接住报“无法启动磁力引擎”。
