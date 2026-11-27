@@ -2201,6 +2201,7 @@ private fun HomeCapsule(
  * sheetListScrollGuard 守嵌套滚动，超长列表在弹窗内滚、滚到顶下滑才收弹窗。
  */
 @Composable
+@OptIn(ExperimentalMaterial3Api::class) // v1.4.32：ModalBottomSheet/rememberModalBottomSheetState 是实验 API
 private fun HomeFilterDim(
     name: String,
     options: List<Pair<String, String>>,

@@ -499,7 +499,7 @@ class MainActivity : ComponentActivity() {
                     // background 不是 values 里的固定启动色，运行时再补一次；颜色没变
                     // 就不重复设（DecorView.setBackgroundDrawable 每调一次就 requestLayout + invalidate）。
                     val bgArgb = sysScheme.background.toArgb()
-                    if ((w.background as? ColorDrawable)?.color != bgArgb) {
+                    if ((w.decorView.background as? ColorDrawable)?.color != bgArgb) {
                         w.setBackgroundDrawable(ColorDrawable(bgArgb))
                     }
                     val light = statusBg.luminance() > 0.5f
