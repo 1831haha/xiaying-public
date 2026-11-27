@@ -158,7 +158,7 @@ internal fun LiveSettingsSheet(
                             )
                         }
                         // v1.4.12 第 2 步：该源有自带节目单（频道属性或列表地址）时打“已配”，
-                        // 只看有没有、不探活（没探活不能打 ✓）。
+                        // 只看有没有、不探活（没探活不能标通过）。
                         if (key in epgSourceKeys) {
                             Text(
                                 text = "已配",

@@ -1568,7 +1568,7 @@ fun SourcesScreen(
             }
             item {
                 Text(
-                    text = "填一个影视站网址就能当首页源用，点卡片即切换，名称可空自动取域名",
+                    text = "填一个影视站网址就能当首页源用，点卡片即切换，名称选填，空则自动取域名",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -2382,7 +2382,7 @@ fun SourcesScreen(
                     }
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        text = "名称（可空，自动取域名）",
+                        text = "名称（选填，自动取域名）",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
