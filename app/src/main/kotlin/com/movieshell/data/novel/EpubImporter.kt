@@ -172,6 +172,9 @@ object EpubImporter {
         val entry = zip.getEntry(path)
             ?: runCatching { zip.getEntry(URLDecoder.decode(path, "UTF-8")) }.getOrNull()
             ?: return null
+        // TA 审码 M1（1.4.34 修复轮）：预算耗尽即拒，不再往下读——否则 N 个 ≤20MB 条目
+        // 会逐条读完并全部驻留 chapters，200MB 总预算只是事后否决、防不住 OOM。
+        if (budgetLeft != null && budgetLeft[0] <= 0) return null
         if (entry.size > MAX_EPUB_ENTRY_BYTES) return null
         val bytes = runCatching {
             zip.getInputStream(entry).use { readBytesCapped(it, MAX_EPUB_ENTRY_BYTES) }
