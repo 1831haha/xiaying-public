@@ -612,7 +612,8 @@ fun BookshelfScreen(
                             sortNames.forEachIndexed { i, name ->
                                 GlassMenuItem(
                                     Icons.AutoMirrored.Filled.Sort, name,
-                                    trailing = if (sortMode == i) "✓" else null,
+                                    // v1.4.34 C 组 P2-06：选中标记用图标，不用 "✓" 字形。
+                                    trailingIcon = if (sortMode == i) Icons.Filled.Check else null,
                                     onClick = {
                                         showSortMenu = false
                                         sortMode = i

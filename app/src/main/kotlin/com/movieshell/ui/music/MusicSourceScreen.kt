@@ -392,7 +392,7 @@ fun MusicSourceScreen(onBack: () -> Unit = {}) {
         val job = scope.launch {
             try {
                 // v0.120.0：逐档串行试——内置按引擎自报档次（192k→128k），自定义按脚本
-                // inited 自报音质降序（无自报兜底 320k→128k）；每档记 ✓/✗，取消时 break
+                // inited 自报音质降序（无自报兜底 320k→128k）；每档记通过/失败，取消时 break
                 val (summary, firstUrl) = withContext(Dispatchers.IO) {
                     val qualities: List<String> = if (source.builtin) {
                         LxMusicSourceEngine.BUILTIN_QUALITIES
@@ -418,7 +418,7 @@ fun MusicSourceScreen(onBack: () -> Unit = {}) {
                         }.getOrElse { e -> if (e is CancellationException) throw e else null }
                         val ok = !url.isNullOrBlank()
                         if (ok && first == null) first = url
-                        results += "$q ${if (ok) "✓" else "✗"}"
+                        results += "$q ${if (ok) "通过" else "失败"}"
                     }
                     results.joinToString(" / ") to first
                 }
@@ -936,8 +936,11 @@ fun MusicSourceScreen(onBack: () -> Unit = {}) {
             },
             title = "测试${if (testSource?.builtin == true) "内置" else "自定义"}源解析",
             subtitle = testSource?.name,
-            dismissText = if (testing) null else "关闭",
-            onConfirm = null,
+            // v1.4.34 C 组 P2-05：测试结果是纯提示，用“知道了”；testing 期间不给
+            // 确认按钮（onConfirm=null 时 TechDialog 不渲染确认按钮），只留右上角关。
+            confirmText = "知道了",
+            onConfirm = if (testing) null else ({ testMsg = null }),
+            dismissText = null,
         ) {
             if (testing) {
                 Row(

@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Link
@@ -312,8 +313,18 @@ fun ParseSettingsScreen(onBack: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
+                    // v1.4.34 C 组 P2-06：已选项的“ ✓”字形改 Material Icons。
+                    if (v == current) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = "已选",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                    }
                     Text(
-                        "$v 秒" + if (v == current) " ✓" else "",
+                        "$v 秒",
                         color = if (v == current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     )
                 }
