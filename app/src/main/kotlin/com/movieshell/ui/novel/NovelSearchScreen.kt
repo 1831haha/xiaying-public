@@ -54,9 +54,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -140,11 +143,22 @@ fun NovelSearchScreen(
     var removeTarget by remember { mutableStateOf<Pair<SourceGroup, NovelSearchResult>?>(null) }
     // v1.2.1：搜书结果按源分组可折叠——默认全展开，点组头收起/展开；
     // 折叠态按源 key 记在本次页面内，组头始终显示本数，收起也不会悄悄藏结果。
-    var collapsedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // v1.4.35：进书详情再返回不丢折叠态——原来 remember，进页重建就全展开；
+    // LaunchedEffect(results) 的“新结果复位”不动，新搜到结果仍复位。
+    var collapsedGroups by rememberSaveable(
+        stateSaver = Saver<Set<String>, List<String>>(save = { it.toList() }, restore = { it.toSet() }),
+    ) { mutableStateOf(emptySet<String>()) }
     // v1.2.1：新结果一到就复位折叠态——上次的折叠不带到新结果上；
     // 搜失败时结果不换（留着旧结果＋顶行明说），折叠也不动，正好对上。
+    // v1.4.35：复位只在结果集内容真正变化时做（内容指纹比对）——
+    // LaunchedEffect 进页重跑会把 rememberSaveable 恢复的折叠清掉。
+    var foldedFor by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(results) {
-        collapsedGroups = emptySet()
+        val fp = results.hashCode()
+        if (foldedFor != fp) {
+            foldedFor = fp
+            collapsedGroups = emptySet()
+        }
     }
     // v1.2.1：两种视图切换——按源分组（可折叠）/ 全部合并按书名排序；切 tab 回来不丢。
     var mergeMode by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }

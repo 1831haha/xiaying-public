@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,7 +66,8 @@ fun NovelTocScreen(
     val scope = rememberCoroutineScope()
     var novel by remember { mutableStateOf<Novel?>(null) }
     var chapters by remember { mutableStateOf<List<Chapter>?>(null) }
-    var reversed by remember { mutableStateOf(false) }
+    // v1.4.35：进阅读器再返回不丢倒序态。
+    var reversed by rememberSaveable { mutableStateOf(false) }
     var retrying by remember { mutableStateOf(false) }
 
     fun load() {

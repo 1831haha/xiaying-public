@@ -33,6 +33,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,7 +74,8 @@ fun ExploreAggregateScreen(
     val searchVm: NovelSearchViewModel = viewModel()
     val joining by searchVm.joining.collectAsState()
     val sources by BookSourceManager.sources.collectAsState()
-    var query by remember { mutableStateOf("") }
+    // v1.4.35：聚合搜索词进单源发现页再返回不丢。
+    var query by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { BookSourceManager.load(context) }
@@ -84,7 +87,13 @@ fun ExploreAggregateScreen(
     }
     // v1.4.29（TA 审码必修）：选中态按分类地址存（源 key → 分类 url），不按标题——
     // 同标题可出现两次，标题存选中会让两 chip 同时高亮、反解还取错第一条。
-    var selectedCat by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // v1.4.35：每源选中分类进单源发现页再返回不丢（Map 存成平铺 List<String>）。
+    var selectedCat by rememberSaveable(
+        stateSaver = Saver<Map<String, String>, List<String>>(
+            save = { it.flatMap { (k, v) -> listOf(k, v) } },
+            restore = { it.chunked(2).mapNotNull { p -> if (p.size == 2) p[0] to p[1] else null }.toMap() },
+        ),
+    ) { mutableStateOf(emptyMap<String, String>()) }
     // v0.247.0（F14）：结果/加载/失败原来只按源分，换分类就整组“加载中…”、
     // 上个分类的结果也没留住；现在按（源，分类地址）区分——地址即抓取
     // 身份：同标题不同地址分态；同地址两条共用一份结果（解析层不去重，
@@ -109,14 +118,17 @@ fun ExploreAggregateScreen(
     }
 
     // 首屏：每源默认抓第一个分类；源列表变化时只补抓新源，不重抓已抓过的。
+    // v1.4.35：已选过分类的源不回第一分类——返回时选中态从 rememberSaveable 恢复，
+    // 只补抓恢复的那个分类；新源才默认抓第一个分类。
     LaunchedEffect(aggSources) {
         aggSources.forEach { src ->
             val cats = categoriesByKey[src.key].orEmpty()
             val first = cats.firstOrNull() ?: return@forEach
-            val firstKey = src.key to first.url
-            if (resultsByCat.containsKey(firstKey) || loadingCats.contains(firstKey)) return@forEach
-            selectedCat = selectedCat + (src.key to first.url)
-            load(src, first)
+            val target = cats.firstOrNull { it.url == selectedCat[src.key] } ?: first
+            val targetKey = src.key to target.url
+            if (resultsByCat.containsKey(targetKey) || loadingCats.contains(targetKey)) return@forEach
+            selectedCat = selectedCat + (src.key to target.url)
+            load(src, target)
         }
     }
 

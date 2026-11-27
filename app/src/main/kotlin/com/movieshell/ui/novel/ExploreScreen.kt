@@ -34,6 +34,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +82,9 @@ fun ExploreScreen(
         source?.let { NovelSourceEngine.parseExploreCategories(it.exploreUrl) }.orEmpty()
     }
     var selected by remember(sourceKey) { mutableStateOf<NovelSourceEngine.ExploreCategory?>(null) }
+    // v1.4.35：选中分类按地址存进 rememberSaveable——selected 本身是 remember，
+    // 进书详情再返回会丢；恢复时按地址反查分类（标题可能重复，地址唯一）。
+    var savedCatUrl by rememberSaveable(sourceKey) { mutableStateOf<String?>(null) }
     var results by remember(sourceKey) { mutableStateOf<List<NovelSearchResult>>(emptyList()) }
     var page by remember(sourceKey) { mutableStateOf(1) }
     var loading by remember(sourceKey) { mutableStateOf(false) }
@@ -90,7 +94,9 @@ fun ExploreScreen(
     // v1.4.27 P0.8：发现默认列表——有 ruleExploreList 的源默认进列表（解析成书目），
     // 没有列表规则的源仍默认原网页直渲（列表解析不出东西）。顶部按钮仍可随时切换。
     // key 带上“源是否已载入”：冷启动时书源表还没载入（source=null），载入后按规则重定一次默认。
-    var webMode by remember(sourceKey, source != null) {
+    // v1.4.35：列表/原网页模式进详情再返回不丢；key 带 source != null，
+    // 冷启动源表未载入时先按空默认，载入后仍按规则重定一次默认（与原来一致）。
+    var webMode by rememberSaveable(sourceKey, source != null) {
         mutableStateOf(ExploreDefaults.defaultWebMode(source))
     }
     var webView by remember { mutableStateOf<WebView?>(null) }
@@ -126,7 +132,10 @@ fun ExploreScreen(
     LaunchedEffect(categories.firstOrNull(), initialCategory) {
         val first = categories.firstOrNull() ?: return@LaunchedEffect
         if (selected == null) {
-            selected = categories.firstOrNull { it.title == initialCategory } ?: first
+            // v1.4.35：恢复优先按保存的分类地址（返回时），再按入参初始分类，最后首个分类。
+            selected = categories.firstOrNull { it.url == savedCatUrl }
+                ?: categories.firstOrNull { it.title == initialCategory } ?: first
+            savedCatUrl = selected?.url
             page = 1
             // v1.4.27 P0.8：默认列表模式下首个分类自动加载（原来只有切到列表/点分类才抓）。
             val src = source
@@ -210,6 +219,7 @@ fun ExploreScreen(
                         val cat = categories.firstOrNull { it.title == title }
                         if (cat != null) {
                             selected = cat
+                            savedCatUrl = cat.url
                             page = 1
                             if (!webMode) load(src, cat, 1, false)
                         }

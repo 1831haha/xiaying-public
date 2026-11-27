@@ -72,6 +72,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -175,11 +177,20 @@ fun BookSourceScreen(
     var textEditPy by remember { mutableStateOf<PyBookSourceManager.PyBookRule?>(null) }
     var textEditPyText by remember { mutableStateOf("") }
     // v0.197.0：阅读式书源列表——顶部搜索过滤 + 批量选择（全选/反选/删除）
-    var srcQuery by remember { mutableStateOf("") }
+    // v1.4.35：筛选项/搜索词/批量态离页返回不丢——原来全是 remember，进发现页再返回
+    // 组合重建就回全部；改 rememberSaveable（退栈恢复），与书架/详情页同口径。
+    var srcQuery by rememberSaveable { mutableStateOf("") }
     // v1.4.29：点统计区一格按档筛列表（全部/启用/失效/未验证），再点回全部；与搜索词叠加。
-    var statFilter by remember { mutableStateOf(StatFilter.ALL) }
-    var batchMode by remember { mutableStateOf(false) }
-    var selectedSrcKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var statFilter by rememberSaveable(
+        stateSaver = Saver<StatFilter, String>(
+            save = { it.name },
+            restore = { runCatching { StatFilter.valueOf(it) }.getOrDefault(StatFilter.ALL) },
+        ),
+    ) { mutableStateOf(StatFilter.ALL) }
+    var batchMode by rememberSaveable { mutableStateOf(false) }
+    var selectedSrcKeys by rememberSaveable(
+        stateSaver = Saver<Set<String>, List<String>>(save = { it.toList() }, restore = { it.toSet() }),
+    ) { mutableStateOf(emptySet<String>()) }
     var batchDeleteConfirm by remember { mutableStateOf(false) }
     // v0.217.0（F45）：批量删除确认框也要报受影响的在架本数——原来只有
     // 单删确认框有，批量删完用户才知道书架断了多少本。
@@ -208,9 +219,14 @@ fun BookSourceScreen(
     val allShownKeys = remember(shownRows) { shownRows.map { it.selectKey } }
     // v1.4.27 P0.2：JSON 书源按分组分段（SourceGroups.group），折叠集合只在本页内存里。
     val jsonGroups = remember(shownJson) { SourceGroups.group(shownJson) }
-    var collapsedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var collapsedGroups by rememberSaveable(
+        stateSaver = Saver<Set<String>, List<String>>(save = { it.toList() }, restore = { it.toSet() }),
+    ) { mutableStateOf(emptySet<String>()) }
     // 源多（>100）时首次进页默认全部折叠，2000+ 条不用一路滑到底；之后以用户点选为准。
-    var collapseInit by remember { mutableStateOf(false) }
+    // v1.4.35：首次折叠初始化标记也进 rememberSaveable——源超 100 条时
+    // 进页默认全折叠；原来 remember，进发现页返回会重跑一次全折叠，
+    // 把恢复的折叠态清掉。
+    var collapseInit by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(sources.size) {
         if (!collapseInit && sources.isNotEmpty()) {
             collapseInit = true

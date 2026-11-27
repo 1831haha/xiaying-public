@@ -49,6 +49,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,15 +99,21 @@ fun MediaServerScreen(
     val servers by EmbyStore.servers.collectAsState()
     val active = servers.firstOrNull { it.id == EmbyStore.activeId(context) } ?: servers.firstOrNull()
 
-    var stack by remember { mutableStateOf<List<Level>>(listOf(Level.Root)) }
+    // v1.4.35：浏览层级与搜索词进播放页再返回不丢——原来 remember，进页重建就回根目录；
+    // 层级按字段编码成字符串存 rememberSaveable（编解码见文件底 encodeStack/decodeStack）。
+    var stack by rememberSaveable(
+        stateSaver = Saver<List<Level>, String>(save = { encodeStack(it) }, restore = { decodeStack(it) }),
+    ) { mutableStateOf(listOf(Level.Root)) }
+    // 切服务器才回根目录的标记（见下方 LaunchedEffect(active?.id) 的守卫）。
+    var stackedFor by rememberSaveable { mutableStateOf<String?>(null) }
     var views by remember { mutableStateOf<List<EmbyApi.EmbyItem>>(emptyList()) }
     var resumeItems by remember { mutableStateOf<List<EmbyApi.EmbyItem>>(emptyList()) }
     var items by remember { mutableStateOf<List<EmbyApi.EmbyItem>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var authExpired by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
-    var searching by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var searching by rememberSaveable { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EmbyServer?>(null) }
     var showServerMenu by remember { mutableStateOf(false) }
@@ -216,12 +224,27 @@ fun MediaServerScreen(
         }
     }
 
+    // v1.4.35：按当前层级重抓内容——返回补抓与退级重抓共用。
+    fun reloadLevel(server: EmbyServer) {
+        when (val l = stack.lastOrNull() ?: Level.Root) {
+            Level.Root -> loadRoot(server)
+            is Level.Folder -> loadFolder(server, l.id)
+            is Level.Series -> loadSeries(server, l.id)
+            is Level.Season -> loadSeason(server, l.seriesId, l.seasonId)
+        }
+    }
+
     fun goBack() {
         if (searching) {
             searching = false
             query = ""
+            // v1.4.35（TA S3）：退出搜索后重抓当前层级——原来只清态不重抓，
+            // 列表短时还显示上次搜索结果。
+            active?.let { reloadLevel(it) }
         } else if (stack.size > 1) {
             stack = stack.dropLast(1)
+            // v1.4.35：退回上一级要重抓该级内容——原来只退栈不重抓，列表停在子级内容上。
+            active?.let { reloadLevel(it) }
         } else {
             onBack()
         }
@@ -229,15 +252,27 @@ fun MediaServerScreen(
 
     BackHandler { goBack() }
 
+    // v1.4.35：切服务器才回根目录——LaunchedEffect 进页重跑时只在服务器真换了时复位；
+    // 返回时层级已从 rememberSaveable 恢复，只补抓当前层级（搜索中则重跑搜索）。
     LaunchedEffect(active?.id) {
-        stack = listOf(Level.Root)
-        searching = false
-        query = ""
-        views = emptyList()
-        resumeItems = emptyList()
-        items = emptyList()
         val server = active ?: return@LaunchedEffect
-        loadRoot(server)
+        if (stackedFor != server.id) {
+            stackedFor = server.id
+            stack = listOf(Level.Root)
+            searching = false
+            query = ""
+            views = emptyList()
+            resumeItems = emptyList()
+            items = emptyList()
+            loadRoot(server)
+        } else if (searching && query.isNotBlank()) {
+            doSearch(server, query)
+        } else {
+            // v1.4.35（TA S2）：搜索框已清空但 searching 还 true 时，先退出搜索态再重抓层级，
+            // 否则层级内容会渲染在搜索分支（根目录丢掉“继续观看/媒体库”分区）。
+            if (searching) searching = false
+            reloadLevel(server)
+        }
     }
 
     fun playItem(server: EmbyServer, item: EmbyApi.EmbyItem) {
@@ -873,6 +908,33 @@ private sealed interface Level {
     data class Folder(val id: String, val name: String) : Level
     data class Series(val id: String, val name: String) : Level
     data class Season(val seriesId: String, val seriesName: String, val seasonId: String, val name: String) : Level
+}
+
+// v1.4.35：浏览层级进 rememberSaveable 的编解码——层级之间用 \u0002 分隔、
+// 字段之间用 \u0001 分隔（控制字符不会出现在 Emby 标题/ID 里）；解码失败的
+// 层级直接丢掉，空栈或首层不是 Root 时回根目录。
+private fun encodeStack(stack: List<Level>): String = stack.joinToString("\u0002") { level ->
+    when (level) {
+        Level.Root -> "root"
+        is Level.Folder -> "folder\u0001${level.id}\u0001${level.name}"
+        is Level.Series -> "series\u0001${level.id}\u0001${level.name}"
+        is Level.Season -> "season\u0001${level.seriesId}\u0001${level.seriesName}\u0001${level.seasonId}\u0001${level.name}"
+    }
+}
+
+private fun decodeStack(raw: String): List<Level> {
+    val levels = raw.split("\u0002").mapNotNull { part ->
+        val p = part.split("\u0001")
+        when (p.firstOrNull()) {
+            "root" -> Level.Root
+            "folder" -> if (p.size == 3) Level.Folder(p[1], p[2]) else null
+            "series" -> if (p.size == 3) Level.Series(p[1], p[2]) else null
+            "season" -> if (p.size == 5) Level.Season(p[1], p[2], p[3], p[4]) else null
+            else -> null
+        }
+    }
+    if (levels.isEmpty()) return listOf(Level.Root)
+    return if (levels.first() is Level.Root) levels else listOf(Level.Root) + levels
 }
 
 private fun displayTitle(item: EmbyApi.EmbyItem): String {

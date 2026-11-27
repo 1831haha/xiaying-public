@@ -97,7 +97,8 @@ fun HistoryScreen(
 ) {
     val context = LocalContext.current
     var entries by remember { mutableStateOf<List<HistoryEntry>>(emptyList()) }
-    var query by remember { mutableStateOf("") }
+    // v1.4.35：进详情页再返回不丢搜索词（tab 已是 rememberSaveable）。
+    var query by rememberSaveable { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<HistoryEntry?>(null) }
     var showClearAll by remember { mutableStateOf(false) }
     // v0.86.0：子 tab（0=全部 1=点播 2=直播），切 tab 不丢

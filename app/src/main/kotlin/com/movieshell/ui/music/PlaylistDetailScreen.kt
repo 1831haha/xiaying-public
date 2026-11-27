@@ -37,6 +37,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,9 +73,12 @@ fun PlaylistDetailScreen(
     var reloadGen by remember { mutableStateOf(0) }
     var deleteTarget by remember { mutableStateOf<MusicApi.Track?>(null) }
     // v0.89.0：手动排序 / 多选模式
-    var sortingMode by remember { mutableStateOf(false) }
-    var selecting by remember { mutableStateOf(false) }
-    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // v1.4.35：排序态与多选态进播放页再返回不丢。
+    var sortingMode by rememberSaveable { mutableStateOf(false) }
+    var selecting by rememberSaveable { mutableStateOf(false) }
+    var selectedIds by rememberSaveable(
+        stateSaver = Saver<Set<String>, List<String>>(save = { it.toList() }, restore = { it.toSet() }),
+    ) { mutableStateOf(emptySet<String>()) }
     var showSortDialog by remember { mutableStateOf(false) }
     var showDeleteSelected by remember { mutableStateOf(false) }
 

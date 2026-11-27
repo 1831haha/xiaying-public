@@ -56,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -114,12 +115,16 @@ fun PluginMarketScreen(
     val showIncompatible by PluginStore.showIncompatible.collectAsState()
     val enabledSources = remember(sources) { sources.filter { it.enabled } }
 
-    var query by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("") } // ""=全部 env/app
+    // v1.4.35：市场搜索词进插件详情页再返回不丢。
+    var query by rememberSaveable { mutableStateOf("") }
+    // v1.4.35：分类/状态/架构三档筛选同样进详情再返回不丢。
+    var category by rememberSaveable { mutableStateOf("") } // ""=全部 env/app
     // v0.134.0：搜索行默认收起（信息条搜索图标切换）；状态筛选 0 全部/1 可更新/2 已安装/3 未安装
-    var searchOpen by remember { mutableStateOf(false) }
-    var statusFilter by remember { mutableStateOf(0) }
-    var archFilter by remember { mutableStateOf("") }
+    // v1.4.35（TA S5）：搜索行展开态也进 rememberSaveable——query 恢复后过滤生效，
+    // 搜索行若还收着，列表看着像被莫名筛过。
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var statusFilter by rememberSaveable { mutableStateOf(0) }
+    var archFilter by rememberSaveable { mutableStateOf("") }
     var showManage by remember { mutableStateOf(false) }
     // v0.134.0：按市场地址存各自的 MarketInfo，归并时按注册表顺序合并去重。
     // remember 初值同步读磁盘缓存填入（秒开，与旧版缓存优先口径一致）。

@@ -115,6 +115,7 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.movieshell.data.store.MusicSource
 import com.movieshell.data.store.MusicSourceStore
@@ -952,7 +953,10 @@ private fun LocalTab() {
     var addToPlaylistTrack by remember { mutableStateOf<MusicApi.Track?>(null) }
     // v0.89.0：分组维度（0=全部 1=歌手 2=专辑 3=文件夹），rememberSaveable 记住选择；折叠组 key 带维度前缀
     var groupMode by rememberSaveable { mutableIntStateOf(0) }
-    var collapsed by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // v1.4.35：本地分组折叠态进歌单/播放页再返回不丢（分组维度已是 rememberSaveable）。
+    var collapsed by rememberSaveable(
+        stateSaver = Saver<Set<String>, List<String>>(save = { it.toList() }, restore = { it.toSet() }),
+    ) { mutableStateOf(emptySet<String>()) }
 
     // v0.89.0：分组列表（全部模式不分组）
     val groups = remember(groupMode, locals) {
