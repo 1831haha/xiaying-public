@@ -2,10 +2,31 @@ package com.movieshell.data.novel
 
 import com.movieshell.domain.model.Chapter
 import com.movieshell.domain.model.Novel
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.util.UUID
+
+/**
+ * v1.4.34 B-P1-4：流式限量读——分块读、超上限返回 null，绝不一次性无上限
+ * 读入内存；File.length() 快筛不可信（文件可增长/谎报），流内计数为准。
+ * 调用方把 null 当导入失败处理。EpubImporter 同包复用。
+ */
+internal fun readBytesCapped(input: InputStream, maxBytes: Long): ByteArray? {
+    val out = ByteArrayOutputStream()
+    val buf = ByteArray(64 * 1024)
+    var total = 0L
+    while (true) {
+        val n = input.read(buf)
+        if (n < 0) break
+        total += n
+        if (total > maxBytes) return null
+        out.write(buf, 0, n)
+    }
+    return out.toByteArray()
+}
 
 /**
  * v0.35.0 TXT 小说导入。
@@ -30,6 +51,10 @@ object TxtImporter {
         Regex("^(楔子|序章|序言|前言|引子|番外|后记|尾声|终章)"),
         Regex("^[0-9]+([、．]|\\.\\s|\\s)"),
     )
+
+    // v1.4.34 B-P1-4：TXT 上限 64MB——超大文件直接拒，不再 readBytes 整本进内存
+    // （数百 MB 文本在低端机直接 OOM）；64MB 已远超常规小说体积。
+    private const val MAX_TXT_BYTES = 64L * 1024 * 1024
 
     private fun isChapterTitle(line: String): Boolean {
         val t = line.trimStart()
@@ -102,7 +127,11 @@ object TxtImporter {
     }
 
     private fun readTextSmart(file: File): String? {
-        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        // v1.4.34 B-P1-4：先按长度快筛、再流式限量读（双保险）。
+        if (file.length() > MAX_TXT_BYTES) return null
+        val bytes = runCatching {
+            file.inputStream().buffered().use { readBytesCapped(it, MAX_TXT_BYTES) }
+        }.getOrNull() ?: return null
         // v0.215.0：旧写法 file.readText(UTF_8) 遇到非法字节从不抛异常，
         // 只会塞替换字符硬读，GBK 回退是死代码——GBK 中文 TXT 全读成乱码。
         // 改严格解码：UTF-8 非法才落 GBK。
