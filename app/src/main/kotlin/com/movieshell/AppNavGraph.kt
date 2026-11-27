@@ -776,10 +776,18 @@ fun NavGraphBuilder.appDestinations(
                                 // v1.1.31：libmpv 未安装时跳插件市场装插件
                                 onOpenPluginCenter = { navController.navigate("plugin_center/2") },
                                 // v1.1.31：播放失败自动换源——跳同名剧详情页同集播
+                                // v1.4.33 S4：换源不压栈——把当前详情页 pop 掉再进新详情页，
+                                // 3 跳后返回不用连退 4 层；只动自动换源这两处跳转，公共导航不动。
                                 onSwitchSource = { vodId, siteKey, episode ->
-                                    navController.navigate(
-                                        "detail/${Uri.encode(vodId)}?episode=$episode&siteKey=${Uri.encode(siteKey)}",
-                                    )
+                                    val route = "detail/${Uri.encode(vodId)}?episode=$episode&siteKey=${Uri.encode(siteKey)}"
+                                    val currentId = navController.currentDestination?.id
+                                    if (currentId != null) {
+                                        navController.navigate(route) {
+                                            popUpTo(currentId) { inclusive = true }
+                                        }
+                                    } else {
+                                        navController.navigate(route)
+                                    }
                                 },
                             )
                         }
@@ -787,10 +795,17 @@ fun NavGraphBuilder.appDestinations(
                             onBack = { navController.popBackStack() },
                             onOpenPluginCenter = { navController.navigate("plugin_center/2") },
                             // v1.1.31：播放失败自动换源——跳同名剧详情页同集播
+                            // v1.4.33 S4：同上，换源不压栈。
                             onAutoSwitchSource = { vodId, siteKey, episode ->
-                                navController.navigate(
-                                    "detail/${Uri.encode(vodId)}?episode=$episode&siteKey=${Uri.encode(siteKey)}",
-                                )
+                                val route = "detail/${Uri.encode(vodId)}?episode=$episode&siteKey=${Uri.encode(siteKey)}"
+                                val currentId = navController.currentDestination?.id
+                                if (currentId != null) {
+                                    navController.navigate(route) {
+                                        popUpTo(currentId) { inclusive = true }
+                                    }
+                                } else {
+                                    navController.navigate(route)
+                                }
                             },
                         )
                         composable(

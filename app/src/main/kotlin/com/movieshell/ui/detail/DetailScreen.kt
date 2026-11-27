@@ -204,6 +204,7 @@ import com.movieshell.player.PlayResolveScope
 import com.movieshell.player.PlaySession
 import com.movieshell.player.PlayerGestureMath
 import com.movieshell.player.PlayerManager
+import com.movieshell.player.CrossSourceResume
 import com.movieshell.player.EngineHost
 import com.movieshell.player.PlaybackDiagnostic
 import com.movieshell.player.PicsViewerScreen
@@ -1925,6 +1926,10 @@ fun DetailScreen(
                                                     vod = vod,
                                                     siteName = group.site.name,
                                                     onClick = {
+                                                        // v1.4.33 S5：手动点同名剧卡片换源，给 5 分钟
+                                                        // 冷却期一个出口——自动换源的会话就此结束，
+                                                        // 下次播失败重新计 3 跳，不再被旧会话拦住。
+                                                        CrossSourceResume.clear()
                                                         scope.launch {
                                                             val ok = goDetail(group.site, vod.vodId, onVodClick)
                                                             if (!ok) {

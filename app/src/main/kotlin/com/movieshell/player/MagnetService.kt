@@ -22,7 +22,11 @@ class MagnetService : Service() {
         // MagnetRemote.ensure() 读到 fail: 即向用户报“磁力引擎启动失败”，
         // 可见、可重试），再 stopSelf()，不启动引擎线程（否则引擎起来后
         // 端口文件又被覆盖成端口号，主进程以为引擎可用，实际服务已死）。
-        val foregroundOk = runCatching {
+        // v1.4.33 S7：失败原因写进端口文件（与引擎失败路径口径统一），
+        // 只写死“前台服务启动失败”等于让用户照着重试必然同样失败。
+        // S8：端口文件写入走 tmp+rename 原子写——主进程 250ms 一轮读，
+        // 直接 writeText 可能读到空串白等一轮。
+        val foregroundError = runCatching {
             com.movieshell.data.download.Notify.ensureChannels(this)
             val n = androidx.core.app.NotificationCompat.Builder(this, com.movieshell.data.download.Notify.CH_DOWNLOAD)
                 .setSmallIcon(com.movieshell.R.drawable.ic_stat)
@@ -34,11 +38,11 @@ class MagnetService : Service() {
             if (android.os.Build.VERSION.SDK_INT >= 29) {
                 startForeground(9101, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             } else startForeground(9101, n)
-        }.onFailure { LogBus.w("XiaYingMagnet", "磁力前台服务启动失败：${it.message}") }.isSuccess
-        if (!foregroundOk) {
-            runCatching {
-                MagnetRemote.portFile(applicationContext).writeText("fail:前台服务启动失败")
-            }
+        }.onFailure { LogBus.w("XiaYingMagnet", "磁力前台服务启动失败：${it.message}") }.exceptionOrNull()
+        if (foregroundError != null) {
+            writePortFail(
+                "前台服务启动失败：" + (foregroundError.message ?: foregroundError.javaClass.simpleName),
+            )
             stopSelf()
             return
         }
@@ -51,11 +55,19 @@ class MagnetService : Service() {
                 tmp.writeText(port.toString()); tmp.renameTo(f)
             } catch (t: Throwable) {
                 LogBus.e("XiaYingMagnet", "磁力进程启动失败：${t.message}")
-                runCatching {
-                    MagnetRemote.portFile(applicationContext).writeText("fail:" + (t.message ?: t::class.java.simpleName))
-                }
+                writePortFail(t.message ?: t::class.java.simpleName)
             }
         }, "magnet-boot").start()
+    }
+
+    /** S8：失败原因写端口文件也走 tmp+rename 原子写（见 onCreate）。 */
+    private fun writePortFail(reason: String) {
+        runCatching {
+            val f = MagnetRemote.portFile(applicationContext)
+            val tmp = File(f.parentFile, f.name + ".tmp")
+            tmp.writeText("fail:$reason")
+            tmp.renameTo(f)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY

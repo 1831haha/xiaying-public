@@ -2,6 +2,7 @@ package com.movieshell.player
 
 import android.content.Context
 import android.content.Intent
+import androidx.core.content.ContextCompat
 import com.movieshell.core.log.LogBus
 import com.movieshell.core.util.ProcessExitLog
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +38,15 @@ object MagnetRemote {
         currentPort(ctx)?.let { return@withContext it }
         runCatching { portFile(ctx).delete() }
         try {
-            ctx.startService(Intent(ctx, MagnetService::class.java))
+            // v1.4.33 S9：走 startForegroundService——“5 秒内 RemoteServiceException
+            // 被杀”这个前提只在它启动时成立；startService 不置 fgRequired，
+            // 旧代码“只记日志继续跑”未必真会被杀。前置条件已齐：
+            // 清单里 MagnetService 声明了 foregroundServiceType="dataSync"、
+            // FOREGROUND_SERVICE 与 FOREGROUND_SERVICE_DATA_SYNC 权限；
+            // 服务在 onCreate 内立即调 startForeground，5 秒时限内完成。
+            // 后台拉起被拒时抛 ForegroundServiceStartNotAllowedException，
+            // 由下方的 catch 接住报“无法启动磁力引擎”。
+            ContextCompat.startForegroundService(ctx, Intent(ctx, MagnetService::class.java))
         } catch (t: Throwable) {
             return@withContext "无法启动磁力引擎：${t.message}"
         }

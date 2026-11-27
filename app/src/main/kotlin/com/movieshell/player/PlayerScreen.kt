@@ -407,6 +407,8 @@ fun PlayerScreen(
     val triedEngines = remember { mutableSetOf<PlayerEngine>() }
     // v1.1.31：自动换源每集只试一次（换地址时由 LaunchedEffect(playUrl) 复位）
     var autoSourceTried by remember { mutableStateOf(false) }
+    // v1.4.33 S3：跨源续播会话内复用的站源仓库（见 tryAutoSwitchSource）。
+    var crossSourceRepo by remember { mutableStateOf<SiteRepository?>(null) }
     // v0.123.0：同一内核重拉流重试计数（补充B：IO 错误先同内核自愈，≤2 次）
     val sameEngineRetries = remember { mutableIntStateOf(0) }
     // v1.0.8：同一地址是否已试过“清 Referer 重试”（只试一次，换地址重置）
@@ -961,6 +963,9 @@ fun PlayerScreen(
             return
         }
         autoSourceTried = true
+        // v1.4.33 M2：跳转前快照一集数——begin 与 12 秒后的 cb 都用它，
+        // 实时读 PlaySession.episodeIndex 会在用户中途切集时对不上。
+        val epIdx = PlaySession.episodeIndex
         val currentKeys = buildSet {
             siteKey?.takeIf { it.isNotBlank() }?.let { add(it) }
             DrpySourceManager.activeRuleName()?.let { add("$LOCAL_DRPY_PREFIX$it") }
@@ -968,7 +973,7 @@ fun PlayerScreen(
             PhpSourceManager.activeRuleName()?.let { add("php:$it") }
         }
         // v1.4.33：同剧同集跳满 3 个源即停，不死循环；当前源一并记进已试集合。
-        if (!CrossSourceResume.begin(target, PlaySession.episodeIndex, currentKeys)) {
+        if (!CrossSourceResume.begin(target, epIdx, currentKeys)) {
             AppToast.show(context, "已试过多个源，仍无法播放", long = false)
             errorMsg = fallbackMsg
             return
@@ -976,13 +981,19 @@ fun PlayerScreen(
         val excludedKeys = CrossSourceResume.excludedKeys()
         AppToast.show(context, "当前源播不了，正在找其他源…", long = false)
         scope.launch {
-            val repo = SiteRepository(
-                drpyEngine = DrpySourceManager.drpyEngineAdapter,
-                pyEngine = PySourceManager.engineAdapter,
-            )
-            runCatching {
-                withContext(Dispatchers.IO) { repo.loadFromConfig(buildSearchConfigJson(context)) }
-            }
+            // v1.4.33 S3：会话内复用同一个 SiteRepository——每跳都 new +
+            // 全量 loadFromConfig 会重解析整份订阅 JSON；新会话（hopCount==0）
+            // 或 repo 为空时才重建加载。
+            val repo = crossSourceRepo.takeIf { CrossSourceResume.hopCount() > 0 }
+                ?: SiteRepository(
+                    drpyEngine = DrpySourceManager.drpyEngineAdapter,
+                    pyEngine = PySourceManager.engineAdapter,
+                ).also { fresh ->
+                    runCatching {
+                        withContext(Dispatchers.IO) { fresh.loadFromConfig(buildSearchConfigJson(context)) }
+                    }
+                    crossSourceRepo = fresh
+                }
             var bestSite: Site? = null
             var bestVod: Vod? = null
             var bestScore = -1
@@ -1007,11 +1018,12 @@ fun PlayerScreen(
             val site = bestSite
             val vod = bestVod
             if (site != null && vod != null && bestScore >= 30) {
-                // v1.4.33：跳之前记进已试集合——新源播失败回来续搜时不再回跳它。
-                CrossSourceResume.recordHop(site.key)
+                // v1.4.33 M3：跳之前记进已试集合，并把当前位置带过去——新源播失败
+                // 回来续搜时不再回跳它；新页面用 pendingPosMs 兜底续播。
+                CrossSourceResume.recordHop(site.key, EngineHost.currentPosition())
                 LogBus.i("Player", "播放失败，自动换源：${site.name}（健康分 $bestScore）")
                 AppToast.show(context, "已自动换源：${site.name}", long = false)
-                cb(vod.vodId, site.key, PlaySession.episodeIndex)
+                cb(vod.vodId, site.key, epIdx)
             } else {
                 // v1.1.31：剩下的全是常年失败的源（未试过的源是 50 分，不受这条影响），
                 // 换过去大概率再失败——不如直接报原错误，省一次换源等待
@@ -1392,7 +1404,11 @@ fun PlayerScreen(
                     HistoryStore.getProgress(context, playSourceType, playSourceKey.orEmpty(), vodId.orEmpty(), lastEpIdx)
                         .takeIf { it > 0 }
                         ?: HistoryStore.getProgress(context, playUrl)
-                    ).takeIf { it > RESUME_THRESHOLD_MS } ?: 0L
+                    // v1.4.33 M3：历史里没有本集进度时，用换源时记下的位置兜底
+                    // （新源/新地址查不到历史，从 0 播就不是“续播”了）；
+                    // consumePendingPos 只消费一次，对不上剧集返回 0。
+                ).takeIf { it > RESUME_THRESHOLD_MS }
+                    ?: CrossSourceResume.consumePendingPos(resumeShowName, PlaySession.episodeIndex)
                 if (EngineHost.isActiveFor(playUrl)) {
                     // v0.294.40：同一地址已在播（全屏跳页 / 返回小窗）：接续同一个播放器，不重新打开。
                     // 重新打开会从 0 秒起播（进度还没写进历史），迅雷本地服务也受不了旧连接未断就再连。
@@ -2776,6 +2792,8 @@ fun PlayerScreen(
         var dur by remember { mutableLongStateOf(0L) }
         var scrubbing by remember { mutableStateOf(false) }
         var scrubPos by remember { mutableLongStateOf(0L) }
+        // v1.4.33 M1：连续播稳的轮询次数（40×500ms=20s 才算播稳，见下方轮询块）。
+        var playTicks by remember { mutableIntStateOf(0) }
         LaunchedEffect(engine, playUrl) {
             while (true) {
                 delay(500)
@@ -2786,9 +2804,15 @@ fun PlayerScreen(
                     liveEverPlayed = true
                     if (isLive) onLiveFirstPlayed?.invoke()
                 }
-                // v1.4.33：播起来了，本轮跨源续播会话结束——下次失败重新计 3 跳。
-                if (isPlaying && !isLive) {
+                // v1.4.33 M1：连续播稳 20 秒才清会话——isPlaying 只代表已进入
+                // READY，不等于播稳了；目标源播几秒又挂（限速/分片 403）时不
+                // 清会话，否则下次失败重开会话、已试源全部回候选，3 跳上限
+                // 被绕过。断点续播第一帧 pos 就 >15s，不能用 pos 判播稳，
+                // 只数连续播放的轮询次数（40×500ms=20s）。
+                if (isPlaying && !isLive) playTicks++ else playTicks = 0
+                if (playTicks >= 40) {
                     CrossSourceResume.clearIfActiveFor(resumeShowName, PlaySession.episodeIndex)
+                    playTicks = 0
                 }
                 if (!scrubbing) pos = EngineHost.currentPosition()
                 dur = EngineHost.duration()
