@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -61,6 +62,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -165,20 +167,22 @@ fun ThemeCollectionScreen(onBack: () -> Unit) {
                                 AppToast.show(context, if (ok) "已保存到我的收藏" else "收藏已满 50 个，先删一些")
                             },
                             shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
                             modifier = Modifier.weight(1f).height(40.dp),
                         ) {
                             Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("保存当前观感", maxLines = 1)
+                            Text("保存当前观感", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
                             onClick = { jsonPicker.launch("application/json") },
                             shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
                             modifier = Modifier.weight(1f).height(40.dp),
                         ) {
                             Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("导入主题", maxLines = 1)
+                            Text("导入主题", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }

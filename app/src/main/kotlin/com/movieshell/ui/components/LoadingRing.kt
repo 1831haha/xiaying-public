@@ -25,7 +25,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
@@ -41,7 +40,8 @@ import com.movieshell.ui.theme.LocalBrandGradient
  * 1.4.30 的小说绿 #1A8B5C 与 StatusRing 的“可用”绿撞色，加载中与可用同屏
  * 分不清；渐变只表达“正在加载”，不表达状态。
  * v1.4.32 TA 必修 Y2：浅色下炫彩渐变对比度不够（mint #76FF03 对 #FFF8F5
- * 约 1.2:1，绿约 4.1:1）——浅色时渐变色向 onSurface 混 0.35，保色相提对比。
+ * 约 1.2:1，绿约 4.1:1）——浅色时渐变色向 onSurface 混 0.40（复核：mint 约 3:1
+ * 刚过非文本对比线），保色相提对比。
  *
  * 与 StatusRing 的分工：StatusRing 是状态指示（颜色语义：绿就绪/琥珀加载中/
  * 红失败/灰未选，带中央点），首页源标签 14dp 与服务插件页服务状态仍走它，
@@ -57,9 +57,9 @@ fun LoadingRing(
 ) {
     val scheme = MaterialTheme.colorScheme
     val brandColors = LocalBrandGradient.current
-    // 浅色时把渐变色向 onSurface 混 0.35（见 KDoc Y2）；深色下亮色对深底够用，不动。
+    // 浅色时把渐变色向 onSurface 混 0.40（见 KDoc Y2）；深色下亮色对深底够用，不动。
     val mixedColors = if (scheme.background.luminance() > 0.5f) {
-        brandColors.map { lerp(it, scheme.onSurface, 0.35f) }
+        brandColors.map { lerp(it, scheme.onSurface, 0.40f) }
     } else {
         brandColors
     }
@@ -67,10 +67,9 @@ fun LoadingRing(
     val ringColors = mixedColors + mixedColors.first()
     val trackColor = mixedColors.first().copy(alpha = 0.15f)
     // v1.4.32 S1：brush 只建一次——写在 draw lambda 里动画每帧都会重建 SweepGradient。
-    // 内外圈同心（内环中心 == 画布中心），一把刷子够用。
-    val diameterPx = with(LocalDensity.current) { diameter.toPx() }
-    val ringBrush = remember(ringColors, diameterPx) {
-        Brush.sweepGradient(ringColors, center = Offset(diameterPx / 2f, diameterPx / 2f))
+    // 内外圈同心（内环中心 == 画布中心），一把刷子够用；center 不指定，默认取绘制中心。
+    val ringBrush = remember(ringColors) {
+        Brush.sweepGradient(ringColors)
     }
     val transition = rememberInfiniteTransition(label = "loadingRing")
     val angle by transition.animateFloat(

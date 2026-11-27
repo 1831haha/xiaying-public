@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- v1.4.32：窗口背景跟随日夜（浅色取浅色主题背景 #FFF8F5），修浅色模式黑闪；
-         深色值在 values-night/colors.xml。 -->
-    <color name="window_background">#FFF8F5</color>
+    <!-- v1.4.32 修复轮（TA 复核）：窗口背景固定品牌深色 #1C130D，与 v31 启动画面同色。
+         不跟日夜的原因：API ≤30 的系统启动窗口由 system_server 在应用进程启动前解析，
+         取不到 App 内保存的主题，只能跟系统日夜——系统浅色＋App 内深色时白闪；
+         attachBaseContext 又只作用于本进程，够不到启动窗口，还会让运行中切
+         「跟随系统」不生效。固定深色＋MainActivity 里按当前色板再补一次底色，
+         三处一起消掉；这不是纯黑，浅色黑闪不会回来。values-night 文件已删（同值多余）。 -->
+    <color name="window_background">#1C130D</color>
 </resources>

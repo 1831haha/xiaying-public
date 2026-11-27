@@ -406,7 +406,7 @@ private fun TaskCard(
                         Icon(
                             if (task.status == DlStatus.DOWNLOADING || task.status == DlStatus.QUEUED)
                                 Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            contentDescription = "暂停/继续",
+                            contentDescription = if (task.status == DlStatus.FAILED) "重试" else "暂停/继续",
                         )
                     }
                 }
