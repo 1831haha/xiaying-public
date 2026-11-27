@@ -222,6 +222,8 @@ private sealed class LandingTarget {
 /** v1.4.34 B-P1-3：分页前沿章停滞上限与退避基数（见 ReaderScreen 分页 effect）。 */
 private const val MAX_PAGINATION_STALLS = 3
 private const val PAGINATION_STALL_BACKOFF_MS = 1000L
+/** v1.4.34 第二轮（GPT 复审 B-P1-3）：结果驱动重试时，等在途请求出结果的轮询间隔。 */
+private const val PAGINATION_STALL_POLL_MS = 100L
 
 /** v1.4.34 B-P1-3：分页前沿章停滞计数（chapter=-1 表示无停滞）。 */
 private class PaginationStallTracker(var chapter: Int = -1, var count: Int = 0)
@@ -695,20 +697,30 @@ fun ReaderScreen(
                 // v1.4.34 B-P1-3：前沿章未缓存时退避重试。核实：报告称“近零间隔
                 // 忙轮询”不准确——本循环每批以 withFrameNanos 让出一帧，且
                 // 拉取失败不改 chapters、effect 不会因此重启；真正的缺口是
-                // 无退避、无上限。同一章连续多轮仍无正文时指数退避（1s/2s/3s，
-                // 最多 3 次）后本轮收手；delay 只挂起协程，不占主线程。
-                // 正文到了则 chapters 变化重启 effect，本延迟随之取消。
+                // 无退避、无上限。
                 // v1.4.34 修复轮（GPT 审码 B-P1-3）：重试必须用 force=true——
                 // 不带 force 时 loadChapterSilent 会被失败记忆（failedChapters）
-                // 直接拦掉，三次调用只有第一次是真实请求；force 只清本章的
-                // 失败记忆、加载中仍不重复发请求（loadingChapters 守卫不变）。
+                // 直接拦掉；force 只清本章的失败记忆、加载中仍不重复发请求
+                // （loadingChapters 守卫不变）。
+                // v1.4.34 第二轮（GPT 复审 B-P1-3 未通过）：计数必须按真实
+                // 失败次数，不能按调用次数——上轮先 count++ 再调函数，慢失败
+                // （一次请求 8 秒才失败）时后两次调用全被“加载中”拦掉，次数
+                // 用完、实际只发了一次请求。本轮改为结果驱动：发一次请求后等
+                // 在途请求出结果（loadingChapters 里没这章了才算一轮结束），
+                // 正文到了走循环顶排版，仍无正文才计一次失败、退避 1s/2s 再
+                // 发下一次；三次真实失败后本轮收手。delay 只挂起协程，不占主线程。
                 if (paginationStall.chapter != next.index) {
                     paginationStall.chapter = next.index
                     paginationStall.count = 0
                 }
-                if (paginationStall.count >= MAX_PAGINATION_STALLS) break
-                paginationStall.count++
                 loadChapterSilent(next.index, force = true)
+                // 等本轮请求出结果：在途请求完成才算一次重试。
+                while (next.index in loadingChapters) delay(PAGINATION_STALL_POLL_MS)
+                val reloaded = chapters.getOrNull(next.index) ?: break
+                if (reloaded.content.isNotBlank()) continue
+                // 仍无正文：这是一次真实失败，计数、退避、再试。
+                paginationStall.count++
+                if (paginationStall.count >= MAX_PAGINATION_STALLS) break
                 delay(PAGINATION_STALL_BACKOFF_MS * paginationStall.count.toLong())
                 continue
             }
