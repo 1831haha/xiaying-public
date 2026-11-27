@@ -52,8 +52,7 @@ import com.movieshell.domain.model.NovelSearchResult
 import com.movieshell.data.novel.PyBookSourceManager
 import com.movieshell.data.store.NovelStore
 import com.movieshell.ui.components.AppCard
-import com.movieshell.ui.components.StatusRing
-import com.movieshell.ui.components.StatusRingState
+import com.movieshell.ui.components.LoadingRing
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -186,8 +185,8 @@ fun ChangeSourceDialog(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center,
                         ) {
-                            // 整区加载圈统一为 StatusRing（跑马灯圆环 + 黄色状态点）
-                            StatusRing(state = StatusRingState.Loading, diameter = 40.dp)
+                            // v1.4.30：整区加载圈改 E 双环 LoadingRing。
+                            LoadingRing(diameter = 40.dp, caption = "正在搜索…")
                         }
                         !searched || groups.isEmpty() -> Box(
                             modifier = Modifier.fillMaxSize(),

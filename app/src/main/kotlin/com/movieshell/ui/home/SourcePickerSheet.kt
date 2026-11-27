@@ -94,8 +94,7 @@ import com.movieshell.data.source_mgr.SubSiteRecord
 import com.movieshell.data.source_mgr.SubSiteStore
 import com.movieshell.ui.components.V5Chip
 import com.movieshell.ui.components.sheetListScrollGuard
-import com.movieshell.ui.components.StatusRing
-import com.movieshell.ui.components.StatusRingState
+import com.movieshell.ui.components.LoadingRing
 import com.movieshell.ui.components.faviconUrlForHost
 import com.movieshell.ui.components.hdIconCandidatesForHost
 import com.movieshell.ui.components.hostFromUrl
@@ -980,8 +979,8 @@ fun SourcePickerSheet(
         // 沿用原来的六种排列，守卫照 HEAD 全挂回去。
         if (loading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                // 整区加载圈统一为 StatusRing（跑马灯圆环 + 黄色状态点）
-                StatusRing(state = StatusRingState.Loading, diameter = 40.dp)
+                // v1.4.30：整区加载圈改 E 双环 LoadingRing。
+                LoadingRing(diameter = 40.dp)
             }
         } else if (visible.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

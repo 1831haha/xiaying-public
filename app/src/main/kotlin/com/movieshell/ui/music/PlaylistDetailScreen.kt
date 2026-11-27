@@ -48,8 +48,7 @@ import com.movieshell.data.store.MusicPlaylist
 import com.movieshell.player.MusicPlayer
 import com.movieshell.ui.components.EmptyKind
 import com.movieshell.ui.components.EmptyState
-import com.movieshell.ui.components.StatusRing
-import com.movieshell.ui.components.StatusRingState
+import com.movieshell.ui.components.LoadingRing
 import com.movieshell.ui.components.TabTopBar
 import com.movieshell.ui.components.TechDialog
 import kotlinx.coroutines.launch
@@ -146,8 +145,8 @@ fun PlaylistDetailScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    // 整页加载圈统一为 StatusRing（跑马灯圆环 + 黄色状态点）
-                    StatusRing(state = StatusRingState.Loading, diameter = 40.dp)
+                    // v1.4.30：整页加载圈改 E 双环 LoadingRing。
+                    LoadingRing(diameter = 40.dp, caption = "正在加载…")
                 }
                 playlist == null -> Box(
                     modifier = Modifier.fillMaxSize(),

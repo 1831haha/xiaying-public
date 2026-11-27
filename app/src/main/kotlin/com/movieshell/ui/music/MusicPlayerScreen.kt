@@ -109,8 +109,7 @@ import com.movieshell.domain.model.MusicPlayerLayout
 import com.movieshell.player.MusicDownloader
 import com.movieshell.player.MusicPlayer
 import com.movieshell.player.MusicSleepTimer
-import com.movieshell.ui.components.StatusRing
-import com.movieshell.ui.components.StatusRingState
+import com.movieshell.ui.components.LoadingRing
 import com.movieshell.ui.components.TabTopBar
 import com.movieshell.ui.components.TechDialog
 import com.movieshell.ui.theme.LocalBrandGradient
@@ -433,8 +432,8 @@ fun MusicPlayerScreen(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    // 歌词区加载圈统一为 StatusRing（跑马灯圆环 + 黄色状态点）
-                                    StatusRing(state = StatusRingState.Loading, diameter = 28.dp)
+                                    // v1.4.30：歌词区加载圈改 E 双环 LoadingRing。
+                                    LoadingRing(diameter = 28.dp)
                                 }
                                 lyrics.isEmpty() -> Box(
                                     modifier = Modifier.fillMaxSize(),

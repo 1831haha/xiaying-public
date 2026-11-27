@@ -38,8 +38,7 @@ import coil.compose.AsyncImage
 import com.movieshell.ui.components.AppButton
 import com.movieshell.ui.components.AppButtonVariant
 import com.movieshell.ui.components.AppCard
-import com.movieshell.ui.components.StatusRing
-import com.movieshell.ui.components.StatusRingState
+import com.movieshell.ui.components.LoadingRing
 import com.movieshell.ui.components.TechDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -467,12 +466,8 @@ fun NovelSearchScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                         ) {
-                            StatusRing(
-                                state = StatusRingState.Loading,
-                                diameter = 16.dp,
-                                showDot = false,
-                                strokeWidth = 2.dp,
-                            )
+                            // v1.4.30：行内细圈改 E 双环 LoadingRing（文案在行内已有，不另加）。
+                            LoadingRing(diameter = 16.dp, strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 "正在搜索… 已出 ${results.size} 个源",

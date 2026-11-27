@@ -82,8 +82,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.movieshell.ui.components.StatusRing
-import com.movieshell.ui.components.StatusRingState
+import com.movieshell.ui.components.LoadingRing
 import com.movieshell.ui.components.CapsuleTabBar
 import com.movieshell.core.log.LogBus
 import com.movieshell.data.source.MusicApi
@@ -776,8 +775,8 @@ private fun OnlineTab(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    // 搜索区加载圈统一为 StatusRing（跑马灯圆环 + 黄色状态点）
-                    StatusRing(state = StatusRingState.Loading, diameter = 40.dp)
+                    // v1.4.30：搜索区加载圈改 E 双环 LoadingRing。
+                    LoadingRing(diameter = 40.dp)
                 }
                 // v0.180.0：榜单改竖排满宽列表 + 底部说明卡——以前 2x2 小卡
                 // 只占上半截，下半页大片空白看着像没加载完；竖排后榜单、
@@ -1041,7 +1040,7 @@ private fun LocalTab() {
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    StatusRing(state = StatusRingState.Loading, diameter = 40.dp)
+                    LoadingRing(diameter = 40.dp)
                 }
             } else if (locals.isEmpty()) {
                 Box(
@@ -1223,7 +1222,7 @@ private fun FavTab() {
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
-                StatusRing(state = StatusRingState.Loading, diameter = 40.dp)
+                LoadingRing(diameter = 40.dp)
             }
         } else if (favs.isEmpty()) {
             Box(
@@ -1565,7 +1564,7 @@ private fun PlaylistTab(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    StatusRing(state = StatusRingState.Loading, diameter = 40.dp)
+                    LoadingRing(diameter = 40.dp)
                 }
             } else if (playlists.isEmpty()) {
                 Box(
