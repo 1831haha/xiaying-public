@@ -1777,7 +1777,7 @@ fun HomeScreen(
                             kind = EmptyKind.Empty,
                             icon = Icons.Filled.Movie,
                             title = "暂无首页内容",
-                            hint = if (drpyActive) "该源暂无推荐内容，可换个源或下拉刷新" else "先添加并启用站源，首页就有推荐了",
+                            hint = if (drpyActive) "该源暂无推荐内容，可换源或下拉刷新" else "先添加并启用站源，首页就有推荐了",
                             actionText = if (drpyActive) "换源" else "去添加站源",
                             onAction = if (drpyActive) {
                                 { showSourceSheet = true }

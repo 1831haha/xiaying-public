@@ -27,7 +27,6 @@ import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -55,7 +54,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
@@ -72,6 +70,8 @@ import com.movieshell.player.HistoryStore
 import com.movieshell.player.PlaySession
 import com.movieshell.ui.components.AppSwitch
 import com.movieshell.ui.components.AppToast
+import com.movieshell.ui.components.EmptyKind
+import com.movieshell.ui.components.EmptyState
 import com.movieshell.ui.components.TabTopBar
 import com.movieshell.ui.theme.StaticGlowBackground
 import com.movieshell.ui.components.TechDialog
@@ -506,33 +506,17 @@ fun MediaServerScreen(
             ) {
                 if (servers.isEmpty()) {
                     item {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Box(
-                                modifier = Modifier.size(64.dp).clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Storage, null,
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(28.dp),
-                                )
-                            }
-                            Spacer(Modifier.height(16.dp))
-                            Text("还没有添加媒体服务器", style = MaterialTheme.typography.titleMedium)
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "支持自建的 Emby / Jellyfin：填地址和账号登录后，" +
-                                    "就能浏览媒体库、搜索、断点续播。只直连你自己的服务器。",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            Button(onClick = { openAdd() }) { Text("添加服务器") }
-                        }
+                        // v1.4.34 C 组 P2-07：手写空态（64dp 圆 + 标题 + 说明 + 按钮）改走
+                        // 共享 EmptyState；按钮由实填 Button 改组件的 FilledTonal（组件口径）。
+                        EmptyState(
+                            kind = EmptyKind.Empty,
+                            icon = Icons.Outlined.Storage,
+                            title = "还没有添加媒体服务器",
+                            hint = "支持自建的 Emby / Jellyfin：填地址和账号登录后，" +
+                                "就能浏览媒体库、搜索、断点续播。只直连你自己的服务器。",
+                            actionText = "添加服务器",
+                            onAction = { openAdd() },
+                        )
                     }
                 } else if (active != null) {
                     val server = active
@@ -654,7 +638,16 @@ fun MediaServerScreen(
                         }
                     } else if (searching) {
                         if (items.isEmpty()) {
-                            item { EmptyState(Icons.Outlined.Search, "没有找到相关内容", "换个关键词试试") }
+                            // v1.4.34 C 组 P2-07：本文件自带的私有 EmptyState 与共享组件
+                            // 重名且长相不一，删本地版，三处调用全改共享 EmptyState。
+                            item {
+                                EmptyState(
+                                    kind = EmptyKind.Empty,
+                                    icon = Icons.Outlined.Search,
+                                    title = "没有找到相关内容",
+                                    hint = "换个关键词试试",
+                                )
+                            }
                         } else {
                             items(items, key = { it.Id }) { item ->
                                 EmbyRow(server, item) { openItem(server, item) }
@@ -709,12 +702,25 @@ fun MediaServerScreen(
                                 }
                             }
                             if (views.isEmpty() && resumeItems.isEmpty()) {
-                                item { EmptyState(Icons.Outlined.Movie, "媒体库是空的", "服务器上还没有媒体库") }
+                                item {
+                                    EmptyState(
+                                        kind = EmptyKind.Empty,
+                                        icon = Icons.Outlined.Movie,
+                                        title = "媒体库是空的",
+                                        hint = "服务器上还没有媒体库",
+                                    )
+                                }
                             }
                         }
                         is Level.Folder, is Level.Series, is Level.Season -> {
                             if (items.isEmpty()) {
-                                item { EmptyState(Icons.Outlined.Movie, "这里是空的") }
+                                item {
+                                    EmptyState(
+                                        kind = EmptyKind.Empty,
+                                        icon = Icons.Outlined.Movie,
+                                        title = "这里是空的",
+                                    )
+                                }
                             } else {
                                 items(items, key = { it.Id }) { item ->
                                     EmbyRow(server, item) { openItem(server, item) }
@@ -746,7 +752,7 @@ fun MediaServerScreen(
                     value = formName,
                     onValueChange = { formName = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = "名称（可空）",
+                    placeholder = "名称（选填）",
                     singleLine = true,
                 )
                 TechTextField(
@@ -811,7 +817,7 @@ fun MediaServerScreen(
                     value = formApiKey,
                     onValueChange = { formApiKey = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = "API Key（可空，填了可免密码）",
+                    placeholder = "API Key（选填，填了可免密码）",
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                 )
@@ -903,23 +909,6 @@ private fun SectionHeader(title: String, count: Int) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-}
-
-// v1.1.31 精致化：空态（图标＋标题＋可选副文案）。
-@Composable
-private fun EmptyState(icon: ImageVector, title: String, subtitle: String? = null) {
-    Column(
-        Modifier.fillMaxWidth().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp))
-        Spacer(Modifier.height(8.dp))
-        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (!subtitle.isNullOrBlank()) {
-            Spacer(Modifier.height(4.dp))
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

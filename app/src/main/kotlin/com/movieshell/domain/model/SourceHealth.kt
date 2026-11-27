@@ -4,7 +4,7 @@ package com.movieshell.domain.model
  * v1.4.27 解缠②：探/测统一的显示模型。
  *
  * 被动探测（BookProbe，进书源页自动探有发现分类的源，结果落 BookProbeStore）与
- * 主动搜索测试（NovelSourceEngine.testSearch，行内 ▶）触发时机与用途不同，不合并；
+ * 主动搜索测试（NovelSourceEngine.testSearch，行内播放图标）触发时机与用途不同，不合并；
  * 只合并“结果长什么样”：两边都映射到本模型，共用同一套色调与文案口径。
  *
  * 与总定稿的五档（Ok/Slow/Fail/Timeout/Unconfigured）相比多两档，原因如实写在这里：

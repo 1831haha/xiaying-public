@@ -629,7 +629,7 @@ object NovelSourceEngine {
         body.replace(Regex("\\s+"), " ").trim().take(200)
 
     /**
-     * v1.4.27：书源搜索测试（书源管理页行内 ▶ 用；UI 在自己的 testMutex 锁内调用，
+     * v1.4.27：书源搜索测试（书源管理页行内播放图标按钮；UI 在自己的 testMutex 锁内调用，
      * 锁内拿到锁才开始计时，排队等待不计入 timeoutMs）。
      *
      * - searchUrl / ruleSearchList 任一为空 → [TestSearchResult.NotConfigured]，不发请求（与 search() 的 `||` 同口径）；

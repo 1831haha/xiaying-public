@@ -47,6 +47,9 @@ import com.movieshell.ui.theme.LocalBrandGradient
  * 红失败/灰未选，带中央点），首页源标签 14dp 与服务插件页服务状态仍走它，
  * 颜色语义不动；这里只做“正在加载”的样子，不表达状态。整区加载（换源弹窗、
  * 选源悬浮窗、歌单详情、音乐各页、歌词区）与找书页行内 16dp 细圈走这里。
+ * v1.4.34 C 组 P2-02：小尺寸（<= 20dp）只画外圈单环——16dp 双环时外环约
+ * 7–8dp、内环约 3.8–4.8dp、两环空隙约 2.2dp，描边一粗就糊成实心点；单环
+ * 16dp + 2dp 描边仍留约 12dp 中空，一眼就是圈。观感终判仍需真机。
  */
 @Composable
 fun LoadingRing(
@@ -105,27 +108,30 @@ fun LoadingRing(
                     useCenter = false,
                     style = Stroke(width = w, cap = StrokeCap.Round),
                 )
-                // 内圈：淡轨整圆＋亮弧逆时针，半径缩进 20%。
-                val inset = size.minDimension * 0.20f
-                val innerSize = Size(size.width - inset * 2f, size.height - inset * 2f)
-                drawArc(
-                    color = trackColor,
-                    startAngle = 0f,
-                    sweepAngle = 360f,
-                    useCenter = false,
-                    topLeft = Offset(inset, inset),
-                    size = innerSize,
-                    style = Stroke(width = w),
-                )
-                drawArc(
-                    brush = ringBrush,
-                    startAngle = -angle,
-                    sweepAngle = 120f,
-                    useCenter = false,
-                    topLeft = Offset(inset, inset),
-                    size = innerSize,
-                    style = Stroke(width = w, cap = StrokeCap.Round),
-                )
+                // 内圈：淡轨整圆＋亮弧逆时针，半径缩进 20%。小尺寸（<= 20dp）不画内圈
+                //（v1.4.34 C 组 P2-02：双环几何过密会糊成实心点，单环降级）。
+                if (diameter > 20.dp) {
+                    val inset = size.minDimension * 0.20f
+                    val innerSize = Size(size.width - inset * 2f, size.height - inset * 2f)
+                    drawArc(
+                        color = trackColor,
+                        startAngle = 0f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = Offset(inset, inset),
+                        size = innerSize,
+                        style = Stroke(width = w),
+                    )
+                    drawArc(
+                        brush = ringBrush,
+                        startAngle = -angle,
+                        sweepAngle = 120f,
+                        useCenter = false,
+                        topLeft = Offset(inset, inset),
+                        size = innerSize,
+                        style = Stroke(width = w, cap = StrokeCap.Round),
+                    )
+                }
             }
         }
         if (caption != null) {

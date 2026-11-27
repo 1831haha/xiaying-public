@@ -45,6 +45,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
@@ -1096,9 +1097,18 @@ fun WebSniffScreen(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
+                        // v1.4.34 C 组 P2-06：已选项的“ ✓”字形改 Material Icons。
+                        if (selected) {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = "已选",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                        }
                         Text(
-                            text = (when { isTimeout -> "$v 秒"; isConcurrency -> "$v"; else -> "$v 次" }) +
-                                if (selected) " ✓" else "",
+                            text = when { isTimeout -> "$v 秒"; isConcurrency -> "$v"; else -> "$v 次" },
                             color = if (selected) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurface,
                         )

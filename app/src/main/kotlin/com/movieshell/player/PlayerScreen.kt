@@ -1476,7 +1476,7 @@ fun PlayerScreen(
                         // （同内核重拉 → 换内核 → 换线路），错误对话框只在
                         // 链耗尽后由 tryNextLine 置 errorMsg 时出现；直播
                         // 链耗尽后仍经 errorMsg 效应走原 onLiveError 切源。
-                        handlePlayFailure("播放启动失败，请检查地址或切换线路")
+                        handlePlayFailure("播放启动失败，请检查地址或换线路")
                     }
                 }
             }

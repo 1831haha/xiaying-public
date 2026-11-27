@@ -165,7 +165,7 @@ fun PlaylistDetailScreen(
                         kind = EmptyKind.Empty,
                         icon = Icons.Filled.QueueMusic,
                         title = "歌单是空的",
-                        hint = "在歌曲上点 ⁺ 加进来",
+                        hint = "在歌曲上点加号加进来",
                     )
                 }
                 else -> Column(modifier = Modifier.fillMaxSize()) {

@@ -1393,7 +1393,7 @@ internal fun AiSettingsDialog(
             TechTextField(
                 value = writeName,
                 onValueChange = { writeName = it },
-                placeholder = "源名（可空，不填用站名）",
+                placeholder = "源名（选填，不填用站名）",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !aiWorking,

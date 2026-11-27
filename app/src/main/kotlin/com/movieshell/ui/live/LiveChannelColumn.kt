@@ -217,7 +217,7 @@ private fun CurrentChannelBar(
 
 /**
  * v1.4.14 三列频道行（紧凑版，原 ChannelCell 72dp → 48dp）：
- * 序号 + 28dp 台标 + 台名 13sp + 第二行 11sp（共 N 个源）；正在播行右端 ▶，
+ * 序号 + 28dp 台标 + 台名 13sp + 第二行 11sp（共 N 个源）；正在播行右端播放图标，
  * 右端 + 只收藏不播放（已收藏变实心爱心）。
  */
 @OptIn(ExperimentalFoundationApi::class)

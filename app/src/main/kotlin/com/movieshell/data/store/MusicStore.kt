@@ -28,7 +28,7 @@ data class MusicPlaylist(
  *
  * 本地音乐：用户导入的本地音频文件（content URI 持久化，App 重启后仍可播，
  * 取决于系统是否保留 URI 授权——GetContent 授权一般在重启后失效，播不了就提示重新导入）。
- * 收藏：在在线搜索结果上点 ♥ 收藏。
+ * 收藏：在在线搜索结果上点爱心图标收藏。
  */
 object MusicStore {
     private const val TAG = "MusicStore"

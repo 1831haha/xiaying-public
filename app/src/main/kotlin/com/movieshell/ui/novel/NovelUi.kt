@@ -558,6 +558,8 @@ fun GlassMenuItem(
     text: String,
     onClick: () -> Unit,
     trailing: String? = null,
+    // v1.4.34 C 组 P2-06：尾部选中标记用图标（不用 "✓" 字形）；文字尾巴（如 "N 本"）仍走 trailing。
+    trailingIcon: ImageVector? = null,
     danger: Boolean = false,
 ) {
     val p = novelPalette()
@@ -575,6 +577,7 @@ fun GlassMenuItem(
         Spacer(Modifier.width(12.dp))
         Text(text, fontSize = 13.sp, color = c, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (trailing != null) Text(trailing, fontSize = 11.sp, color = p.hint)
+        if (trailingIcon != null) Icon(trailingIcon, null, tint = p.accent, modifier = Modifier.size(NovelTokens.MenuIcon))
     }
 }
 

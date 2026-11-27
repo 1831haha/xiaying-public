@@ -39,6 +39,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.CircularProgressIndicator
@@ -815,15 +817,21 @@ fun ServerPluginScreen(
             onDismissRequest = { selfCheck = null },
             title = "环境自检",
             subtitle = if (result.allOk) "全部通过" else "有失败项，详情如下",
-            dismissText = "关闭",
+            // v1.4.34 C 组 P2-05：纯提示（只告知自检结果）用“知道了”，不用“关闭”
+            //（“关闭”是面板/查看类弹窗的关法；确认按钮文案口径见 TechDialog 注释）。
+            confirmText = "知道了",
+            onConfirm = { selfCheck = null },
+            dismissText = null,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 result.items.forEach { item ->
                     Row(verticalAlignment = Alignment.Top) {
-                        Text(
-                            if (item.ok) "✓" else "✗",
-                            color = if (item.ok) MaterialTheme.colorScheme.ok else MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium,
+                        // v1.4.34 C 组 P2-06：✓/✗ 字形改 Material Icons。
+                        Icon(
+                            if (item.ok) Icons.Filled.Check else Icons.Filled.Close,
+                            contentDescription = if (item.ok) "通过" else "失败",
+                            tint = if (item.ok) MaterialTheme.colorScheme.ok else MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp),
                         )
                         Spacer(Modifier.size(8.dp))
                         Column {

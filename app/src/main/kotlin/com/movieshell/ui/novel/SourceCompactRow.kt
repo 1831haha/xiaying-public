@@ -251,7 +251,7 @@ private fun MiniCheck(checked: Boolean, onChange: (Boolean) -> Unit) {
 }
 
 /**
- * 搜索测试行内钮（00725506 §4）：空闲 ▶（16dp，主强调绿）；排队中「等待」10sp；测试中 20dp 转圈（沿用 PY）。
+ * 搜索测试行内钮（00725506 §4）：空闲播放图标（16dp，主强调绿）；排队中「等待」10sp；测试中 20dp 转圈（沿用 PY）。
  * 热区 36×36dp；状态切换淡入淡出（140ms，减动效即时）。
  */
 @Composable
@@ -318,7 +318,7 @@ fun testTierLabel(h: SourceHealth): String = when (h) {
 
 /**
  * 搜索测试结果弹窗：与搜索验证弹窗同款 88%×60%、16dp 圆角（总定稿“弹窗统一”）；
- * 标题行「搜索测试」+ 源名 + ✕；中间档位徽标（按档位着色）+「关键词：…」+ 结果行；底部「知道了」。
+ * 标题行「搜索测试」+ 源名 + 关闭图标；中间档位徽标（按档位着色）+「关键词：…」+ 结果行；底部「知道了」。
  */
 @Composable
 fun SourceTestResultDialog(r: TestResultDisplay, onDismiss: () -> Unit) {

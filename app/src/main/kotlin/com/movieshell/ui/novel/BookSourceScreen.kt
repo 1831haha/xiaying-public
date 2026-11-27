@@ -587,7 +587,7 @@ fun BookSourceScreen(
                         },
                         testPhase = testRunner.phaseOf(row.selectKey),
                         onTest = {
-                            // v1.4.27 搜索测试：▶ 放开关之前（定稿布局 A 的同组位置）；点后弹关键词输入框。
+                            // v1.4.27 搜索测试：播放图标放开关之前（定稿布局 A 的同组位置）；点后弹关键词输入框。
                             testKeyword = s.effectiveCheckKeyWord
                             testInputFor = s
                         },
@@ -1139,7 +1139,7 @@ fun BookSourceScreen(
                     0 -> {
                         SourceField("名称", draft.name) { draft = draft.copy(name = it) }
                         SourceField("地址", draft.url, hint = "书源唯一标识由此算出，改地址会同步迁书架上的书") { draft = draft.copy(url = it) }
-                        SourceField("分组", draft.group, hint = "可空") { draft = draft.copy(group = it) }
+                        SourceField("分组", draft.group, hint = "选填") { draft = draft.copy(group = it) }
                         SourceField("自定义 UA", draft.headerUa, hint = "空则用默认 UA") { draft = draft.copy(headerUa = it) }
                         SourceField("登录地址", draft.loginUrl) { draft = draft.copy(loginUrl = it) }
                         SourceField("登录校验 JS", draft.loginCheckJs, hint = "阅读式 loginCheckJs，空表示不需要", multiLine = true) { draft = draft.copy(loginCheckJs = it) }

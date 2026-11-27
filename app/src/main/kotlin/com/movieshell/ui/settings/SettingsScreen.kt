@@ -353,7 +353,7 @@ fun SettingsScreen(
                 top = V5.StatusGap,
                 bottom = dockClearance() + 16.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             // 1. 三个统计环：追剧（有更新占比）/ 历史（占 50 条上限）/ 源（本地占比）；
             // 三格都可点：追剧页 / 历史页 / 站源管理（2026-10-28 用户要求恢复“源”入口）。
@@ -391,7 +391,7 @@ fun SettingsScreen(
                     )
                 }
             }
-            item { Spacer(Modifier.height(6.dp)) }
+            item { Spacer(Modifier.height(8.dp)) }
             // 2. 工具磁贴（原快捷宫格 5 个入口，一行排开）
             item {
                 Row(
@@ -417,7 +417,7 @@ fun SettingsScreen(
                     shape = RoundedCornerShape(V5.CornerCard),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 // v1.2.6：主题与主题收藏夹合并为一个「主题」入口（用户要求）——点开进收藏夹页，
                 // 模式/配色/炫彩/海报取色在收藏夹页的「自定义配色」行里开面板；背景底图入口也在收藏夹页。
                 val colorSource by ThemeStore.source.collectAsState()
@@ -453,7 +453,7 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.settingDropContainer(dragState, SettingsLayoutStore.MAIN_PLAYBACK),
                     ) {
                 // v1.2.6：播放设置子页面入口——长按一行拖到它上面松手，行就搬进播放设置页。
@@ -520,7 +520,7 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.settingDropContainer(dragState, SettingsLayoutStore.MAIN_DATA),
                     ) {
                         val dataItems = settingsLayout[SettingsLayoutStore.MAIN_DATA].orEmpty()
@@ -602,11 +602,13 @@ fun SettingsScreen(
                     shape = RoundedCornerShape(V5.CornerCard),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         SegItem(
                             position = SegPos.Single,
                             icon = Icons.Outlined.Link,
-                            title = "网络",
+                            // v1.4.34 C 组 P2-14：组名“网络”里只有这一行也叫“网络”，
+                            // 改“网络设置”，与“播放设置 / 数据设置”对齐。
+                            title = "网络设置",
                             subtitle = if (dohEnabled) "DoH 已开启" else "DoH 已关闭 · DNS over HTTPS",
                             onClick = onNetworkSettingsClick,
                         )
@@ -620,7 +622,7 @@ fun SettingsScreen(
                     shape = RoundedCornerShape(V5.CornerCard),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 SegItem(
                     position = SegPos.First,
                     icon = Icons.Outlined.VpnKey,
@@ -651,7 +653,7 @@ fun SettingsScreen(
                     shape = RoundedCornerShape(V5.CornerCard),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 SegItem(
                     position = SegPos.First,
                     icon = Icons.Outlined.BugReport,
@@ -729,7 +731,7 @@ internal fun SettingsGroup(
     // v0.279.0 旧版：分组 = 10.5sp t3 小标题 + s1 圆角 10 的卡片（行间 1px 分隔线）。
     Column {
         SettingsCaption(title)
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
         V5Tile(modifier = Modifier.fillMaxWidth(), padding = PaddingValues(0.dp)) {
             content()
         }
@@ -804,7 +806,7 @@ internal fun SingleChoiceDialog(
         subtitle = subtitle,
     ) {
             // v1.2.15：收紧行高 + 选中行浅底高亮（效果图定版）；点行即选即关，不加确认按钮。
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 options.forEach { option ->
                     val isSelected = option == selected
                     Row(
@@ -816,7 +818,7 @@ internal fun SingleChoiceDialog(
                                 else Color.Transparent,
                             )
                             .clickable { onSelect(option) }
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
@@ -962,7 +964,7 @@ internal fun SegItem(
             .background(cs.surfaceContainerLowest)
             .then(if (onClick != null && enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .then(if (!enabled) Modifier.alpha(0.45f) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (leading != null) {
@@ -1001,7 +1003,7 @@ internal fun SegItem(
             }
         }
         if (content != null) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
             content()
         }
     }
