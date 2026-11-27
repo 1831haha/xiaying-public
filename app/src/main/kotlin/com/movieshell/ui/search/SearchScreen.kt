@@ -409,7 +409,7 @@ fun SearchScreen(
                             kind = EmptyKind.Empty,
                             icon = Icons.Filled.Search,
                             title = "没有找到「$submitted」相关结果",
-                            hint = "换个关键词，或去换源页换个源再搜",
+                            hint = "换个关键词，或去换源页换源再搜",
                             actionText = "返回",
                             onAction = { vm.backToSearch() },
                         )

@@ -482,7 +482,7 @@ fun DetailScreen(
         resumeReady = true
     }
 
-    // v1.1.19：播放页五 Tab（效果图定版）——简介/追更/剧评/推荐/快搜，各一个专属色；
+    // v1.1.19：播放页五 Tab（效果图定版）——简介/追剧/剧评/推荐/快搜，各一个专属色；
     // 切 Tab 时内容整体换面板，播放器与播放状态不动。下标存盘（枚举本身进不了 Bundle）。
     var selectedTabIndex by rememberSaveable(vodId) { mutableIntStateOf(0) }
     val selectedTab = DetailTab.values().getOrNull(selectedTabIndex) ?: DetailTab.INTRO
@@ -490,7 +490,7 @@ fun DetailScreen(
     var epViewGrid by rememberSaveable(vodId) { mutableStateOf(true) }
     var epDesc by rememberSaveable(vodId) { mutableStateOf(false) }
     // v1.1.19：Tab 栏共享状态——倍速与弹幕开关与播放器内同一条流/同一个开关，
-    // 任一处改，另一处立即跟上；追更提醒读 FollowStore 的更新检测总开关。
+    // 任一处改，另一处立即跟上；追剧提醒读 FollowStore 的更新检测总开关。
     val currentSpeed by PlayerSettings.speedFlow(context).collectAsState()
     val danmakuEnabled by com.movieshell.player.danmaku.DanmakuSettings.enabled.collectAsState()
     var showRateMenu by remember { mutableStateOf(false) }
@@ -507,7 +507,7 @@ fun DetailScreen(
     LaunchedEffect(coverUrl) {
         posterSeed = if (coverUrl.isNotBlank()) PosterSeed.extract(context, coverUrl) else null
     }
-    // v1.1.19：追更提醒开关——FollowStore 的更新检测总开关（12 小时后台查更新，
+    // v1.1.19：追剧提醒开关——FollowStore 的更新检测总开关（12 小时后台查更新，
     // 有新集发通知）；进页读一次，开关只改这一处。
     var remindEnabled by remember { mutableStateOf(FollowStore.isCheckEnabled(context)) }
     // v1.1.19：推荐——当前源首页数据，第一次进推荐 Tab 才拉，之后不再重复拉。
@@ -808,7 +808,7 @@ fun DetailScreen(
     }
 
     /**
-     * v1.1.19：追/取消追剧唯一入口——Tab 栏爱心与追更 Tab 的按钮共用，
+     * v1.1.19：追/取消追剧唯一入口——Tab 栏爱心与追剧 Tab 的按钮共用，
      * 与播放器顶栏追剧开关读写同一条 FollowStore 记录（id = followId）。
      */
     fun toggleFollow() {
@@ -1814,7 +1814,7 @@ fun DetailScreen(
                                     )
                                     Spacer(Modifier.height(8.dp))
                                     Text(
-                                        text = "这个源没有可播剧集，下滑看看同名剧、换个源试试",
+                                        text = "这个源没有可播剧集，下滑看看同名剧、换源试试",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -1843,7 +1843,7 @@ fun DetailScreen(
                                             contentAlignment = Alignment.Center,
                                         ) {
                                             Text(
-                                                "看看同名剧，换个源",
+                                                "看看同名剧，换源",
                                                 color = Color.White,
                                                 style = MaterialTheme.typography.labelLarge,
                                             )
@@ -2576,7 +2576,7 @@ private fun successGreenText(isDark: Boolean): Color =
 // v1.1.19：详情页 Tab——五 Tab 各一个专属色（效果图口径）。
 private enum class DetailTab(val label: String, val color: Color) {
     INTRO("简介", Color(0xFF22C55E)),
-    FOLLOW("追更", Color(0xFF3B82F6)),
+    FOLLOW("追剧", Color(0xFF3B82F6)),
     REVIEWS("剧评", Color(0xFFA855F7)),
     RECS("推荐", Color(0xFFF59E0B)),
     SEARCH("快搜", Color(0xFFEC4899)),
@@ -2886,9 +2886,9 @@ private fun SameNameCard(vod: Vod, siteName: String, onClick: () -> Unit) {
     }
 }
 
-// v1.1.19：追更 Tab——追更卡（剧名＋徽章＋追/取消按钮）、更新进度/已看到、
+// v1.1.19：追剧 Tab——追剧卡（剧名＋徽章＋追/取消按钮）、更新进度/已看到、
 // 最近更新列表（NEW 只标在未看的最新一集上，不写日期——无真实日期数据）、
-// 追更提醒开关（FollowStore 更新检测总开关，12 小时后台查更新、有新集发通知）。
+// 追剧提醒开关（FollowStore 更新检测总开关，12 小时后台查更新、有新集发通知）。
 @Composable
 private fun FollowPanel(
     title: String,
@@ -2910,7 +2910,7 @@ private fun FollowPanel(
         else -> "暂无剧集信息"
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = V5.Gutter, vertical = 8.dp)) {
-        // 追更卡
+        // 追剧卡
         Column(
             Modifier
                 .fillMaxWidth()
@@ -2919,7 +2919,7 @@ private fun FollowPanel(
                 .padding(12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // v1.2.3：追更卡加海报小图（无图时不占位）。
+                // v1.2.3：追剧卡加海报小图（无图时不占位）。
                 if (coverUrl.isNotBlank()) {
                     AsyncImage(
                         model = coverUrl,
@@ -2945,11 +2945,11 @@ private fun FollowPanel(
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(50))
-                        .background(if (following) Color(0xFF0B57D0) else cs.surfaceContainerHigh) // v1.2.14 E片：已追更角标白字压 #3B82F6 只有 3.68:1，改 #0B57D0（6.39:1）
+                        .background(if (following) Color(0xFF0B57D0) else cs.surfaceContainerHigh) // v1.2.14 E片：已追剧角标白字压 #3B82F6 只有 3.68:1，改 #0B57D0（6.39:1）
                         .padding(horizontal = 10.dp, vertical = 4.dp),
                 ) {
                     Text(
-                        text = if (following) "已追更" else "未追更",
+                        text = if (following) "已追剧" else "未追剧",
                         style = MaterialTheme.typography.labelMedium,
                         color = if (following) Color.White else cs.onSurfaceVariant,
                     )
@@ -2961,7 +2961,7 @@ private fun FollowPanel(
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurfaceVariant,
             )
-            // v1.2.3：追更进度条——已看集数占总集数的比例，蓝→青渐变；
+            // v1.2.3：追剧进度条——已看集数占总集数的比例，蓝→青渐变；
             // 下方左“已看到第 N 集”、右“N / M”。
             if (episodes.isNotEmpty()) {
                 val watchedCount = (watchedEp + 1).coerceIn(0, episodes.size)
@@ -3002,14 +3002,14 @@ private fun FollowPanel(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            // v1.2.3：未追更时主按钮改蓝渐变（和效果图一致）；已追更的“取消追更”
+            // v1.2.3：未追剧时主按钮改蓝渐变（和效果图一致）；已追剧的“取消追剧”
             // 仍是 tonal 次按钮，逻辑与原来一样。
             if (following) {
                 FilledTonalButton(
                     onClick = onToggleFollow,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("取消追更")
+                    Text("取消追剧")
                 }
             } else {
                 Button(
@@ -3026,13 +3026,13 @@ private fun FollowPanel(
                             .fillMaxWidth()
                             .background(
                                 Brush.horizontalGradient(
-                                    listOf(Color(0xFF1D4ED8), Color(0xFF2563EB)), // v1.2.14 E片：追更按钮白字压蓝渐变左端只有 3.68:1，改 #1D4ED8（6.70:1）
+                                    listOf(Color(0xFF1D4ED8), Color(0xFF2563EB)), // v1.2.14 E片：追剧按钮白字压蓝渐变左端只有 3.68:1，改 #1D4ED8（6.70:1）
                                 ),
                             )
                             .padding(vertical = 12.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("追更这部剧", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Text("追剧这部剧", color = Color.White, style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }
@@ -3080,7 +3080,7 @@ private fun FollowPanel(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    // NEW 只标在未看的最新一集上（追更中才有意义）
+                    // NEW 只标在未看的最新一集上（追剧中才有意义）
                     if (following && idx == latest.first() && watchedEp < idx) {
                         Box(
                             Modifier
@@ -3106,7 +3106,7 @@ private fun FollowPanel(
                 Spacer(Modifier.height(8.dp))
             }
         }
-        // 追更提醒开关
+        // 追剧提醒开关
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -3124,7 +3124,7 @@ private fun FollowPanel(
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = "追更提醒",
+                    text = "追剧提醒",
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurface,
                 )
