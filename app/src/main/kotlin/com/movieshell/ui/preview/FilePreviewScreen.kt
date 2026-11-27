@@ -49,6 +49,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import com.movieshell.core.log.LogBus
 import com.movieshell.data.source_mgr.PhpSourceManager
 import com.movieshell.core.util.StoragePaths
 import com.movieshell.ui.components.TabTopBar
@@ -92,7 +93,10 @@ fun resolvePreviewFile(context: Context, kind: String, fileName: String): File? 
     }.getOrNull()
 }
 
-/** 用外部编辑器打开文件（ACTION_EDIT + FileProvider uri）；失败返回 false，由调用方 Toast */
+/** 用外部编辑器打开文件（ACTION_EDIT + FileProvider uri）；失败返回 false，由调用方 Toast。
+ * v1.4.34 A组 P1-03：catch 里记一条运行日志——之前只 return false，失败原因
+ * （如文件不在 FileProvider 白名单里）连日志里都看不到，只能靠调用方那句
+ * “没有可用的文本编辑器”猜。 */
 fun openFileWithEditor(context: Context, file: File): Boolean {
     return try {
         val uri = FileProvider.getUriForFile(context, fileProviderAuthority(context), file)
@@ -103,11 +107,13 @@ fun openFileWithEditor(context: Context, file: File): Boolean {
         context.startActivity(Intent.createChooser(edit, "用以下应用编辑"))
         true
     } catch (e: Exception) {
+        LogBus.e("FilePreview", "打开编辑器失败：${file.name}", e)
         false
     }
 }
 
-/** 分享文件（ACTION_SEND + FileProvider uri）；失败返回 false，由调用方 Toast */
+/** 分享文件（ACTION_SEND + FileProvider uri）；失败返回 false，由调用方 Toast。
+ * v1.4.34 A组 P1-03：同上，catch 里记运行日志，不再无声失败。 */
 fun shareFile(context: Context, file: File): Boolean {
     return try {
         val uri = FileProvider.getUriForFile(context, fileProviderAuthority(context), file)
@@ -120,6 +126,7 @@ fun shareFile(context: Context, file: File): Boolean {
         context.startActivity(Intent.createChooser(send, "分享文件"))
         true
     } catch (e: Exception) {
+        LogBus.e("FilePreview", "分享文件失败：${file.name}", e)
         false
     }
 }
