@@ -7,6 +7,9 @@ import com.movieshell.core.js.LegadoJsEngine
 import com.movieshell.core.net.HttpClient
 import com.movieshell.core.net.ProxyRouting
 import com.movieshell.core.util.ProcessExitLog
+import com.movieshell.data.download.FollowCheckWorker
+import com.movieshell.data.download.SubRefreshWorker
+import com.movieshell.data.sync.DailyBackupWorker
 import com.movieshell.data.maintain.CacheAutoClean
 import com.movieshell.data.novel.NovelMigration
 import com.movieshell.data.novel.NovelUpdateWorker
@@ -109,6 +112,14 @@ class XiaYingApp : Application() {
         NovelUpdateWorker.schedule(this)
         // v0.162.0：图片缓存超 1GB 时每日空闲清理一次（只清图片，不碰视频 SimpleCache）
         CacheAutoClean.schedule(this)
+        // v1.4.34 A组 P1-01：三个周期 Worker 改到 Application 排一次——
+        // 原来在 MainActivity.onCreate 里每次重建（含转屏）都重新 enqueue，
+        // 三次 WorkManager IPC 全堵在首帧之前；Application 每进程只跑一次。
+        // UPDATE 保留周期起点（WorkManager 2.9 语义，TA P0 排除②已确认），
+        // 开关切换时设置页仍会单独 reschedule（SettingItems）。
+        FollowCheckWorker.reschedule(this)
+        DailyBackupWorker.reschedule(this)
+        SubRefreshWorker.reschedule(this)
         // v0.95.0：小说旧数据一次性备份（.bak），后台跑不阻塞启动
         CoroutineScope(Dispatchers.IO).launch { NovelMigration.runOnce(this@XiaYingApp) }
         // v0.132.0：拉起设了自启动的插件服务（失败只记日志，不阻塞启动）

@@ -67,11 +67,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.movieshell.data.ai.NavCommands
-import com.movieshell.data.download.FollowCheckWorker
-import com.movieshell.data.download.SubRefreshWorker
 import com.movieshell.data.download.Notify
 import com.movieshell.data.store.DownloadStore
-import com.movieshell.data.sync.DailyBackupWorker
 import com.movieshell.data.source.ParseProgressBus
 import com.movieshell.data.source_mgr.DrpySourceManager
 import com.movieshell.data.store.FollowStore
@@ -86,9 +83,7 @@ import com.movieshell.data.store.NovelStore
 import com.movieshell.data.source_mgr.PhpSourceManager
 import com.movieshell.data.source_mgr.PySourceManager
 import com.movieshell.data.source_mgr.WebParseSourceManager
-import com.movieshell.data.source_mgr.SpiderEngine
 import com.movieshell.core.util.StoragePaths
-import com.movieshell.data.source_mgr.SubSiteEngines
 import com.movieshell.data.source_mgr.SubSiteStore
 import com.movieshell.data.store.ParseStore
 import com.movieshell.data.store.PlayerSettings
@@ -227,6 +222,12 @@ class MainActivity : ComponentActivity() {
                 gp.edit().putString("guard_warned_sig", sig).apply()
             }
         }
+        // v1.4.34 A组 P1-01（核实结论）：首帧前剩下的初始化是刻意留下的——
+        // ThemeStore 供 setContent 当场读主题；存储迁移必须在各 Manager
+        // init 之前（见下）；restoreActiveRule 供首页当场取当前源；其余
+        // Store init 只是小 prefs/JSON 读盘、填首帧就要观察的 StateFlow，
+        // 全搬后台会让首帧先空后闪。已搬走的是 Worker 排期（Application，
+        // 每进程一次）与三处重复 init。
         ThemeStore.init(this)
         // v0.237.0 的“跟随系统一次性切浅色”迁移已撤掉（v0.279.0 旧版）：默认改 经典暗色，
         // 没存过模式的用户直接走默认暗色；显式存过亮色/跟随系统的不动（见 ThemeStore.init）。
@@ -246,7 +247,8 @@ class MainActivity : ComponentActivity() {
         PlayerManager.init(this)
         DrpySourceManager.init(this)
         PySourceManager.init(this)
-        PhpSourceManager.init(this)
+        // v1.4.34 A组 P1-01：PhpSourceManager.init 已在 XiaYingApp.onCreate
+        // 里做过（Application 一定先于 Activity 跑，幂等），这里不再重复调。
         WebParseSourceManager.init(this)
         // v0.22.0：插件市场本地状态
         PluginStore.init(this)
@@ -263,15 +265,15 @@ class MainActivity : ComponentActivity() {
         // _tasks 是 StateFlow，下载页观察它自动刷新；Worker 的 claimNext 持同一把锁、
         // 内存空时回退读盘，init 没跑完也不丢任务。
         lifecycleScope.launch(Dispatchers.IO) { DownloadStore.init(this@MainActivity) }
-        FollowCheckWorker.reschedule(this)
-        // v1.3.25 合并 8：每日静默备份（私有目录单文件覆盖，不打扰用户）
-        DailyBackupWorker.reschedule(this)
-        // v0.46.0：订阅自动刷新（每天 1 次）
-        SubRefreshWorker.reschedule(this)
+        // v1.4.34 A组 P1-01：三个周期 Worker 不再这里排——已搬进
+        // XiaYingApp.onCreate，每进程只排一次（UPDATE，周期起点不变）；
+        // 原来每次 Activity 重建（含转屏）都重新 enqueue，三次
+        // WorkManager IPC 全堵在首帧之前。
         WebSourceManager.init(this)
         SniffPatternStore.init(this)
-        SubSiteEngines.init(this)
-        SpiderEngine.init(this)
+        // v1.4.34 A组 P1-01：SubSiteEngines / SpiderEngine 的 init 已在
+        // XiaYingApp.onCreate 里做过（Application 一定先于 Activity 跑，
+        // 两者都是幂等的），这里不再重复调，首帧前少两次调用。
         // v0.5.1 升级修复：订阅站源相对路径/丢失规则文件后台修复，不阻塞启动
         lifecycleScope.launch(Dispatchers.IO) {
             // v0.169.0：收藏功能已删除，清理老数据文件（只跑一次）
