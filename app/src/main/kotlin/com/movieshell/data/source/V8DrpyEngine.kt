@@ -115,6 +115,9 @@ class V8DrpyEngine(
 
     companion object {
         private const val TAG = "V8Drpy"
+        /** v1.4.34 D-P2-2：warnIfLegacySyncRule 的两条正则只编一次（伴生对象级复用）。 */
+        private val CALL_RE = Regex("""(?<![\w$.])(request|fetch|post|pdfh|pdfa|pd)\s*\(""")
+        private val FUNC_DEF_RE = Regex("""\bfunction\s+(\w+)\s*\(""")
         /** v1.3.30：JS 硬超时 15→30 秒，与 drpy 超时放宽同批（GPT 第二轮建议档）。 */
         private const val JS_TIMEOUT_MS = 30_000L
         /** v0.257.0：单次 drpy 执行的累计 HTTP 请求预算（毫秒），给解析留约 3 秒。
@@ -181,17 +184,20 @@ class V8DrpyEngine(
      * 老同步写法 `var html = request(url)` 在 V8 下拿到的是 Promise 对象、数据全空且无报错，
      * 排障极痛。启发式：同一行 `await` 之后出现才算合规；function 定义、同名遮蔽、行尾注释
      * 粗略排除。只报 Warning 不拦截（疑似，不是定罪）。
+     * v1.4.34 D-P2-2：两条正则都只编一次——原来函数定义正则在每条命中
+     * 的循环里现编（数千行规则 × 多次命中），这里一次编好复用。
      */
     private fun warnIfLegacySyncRule(js: String) {
-        val call = Regex("""(?<![\w$.])(request|fetch|post|pdfh|pdfa|pd)\s*\(""")
         var count = 0
         js.lines().forEachIndexed { idx, raw ->
             var line = raw.trimStart()
             if (line.startsWith("//")) return@forEachIndexed
             line = line.substringBefore("//") // 粗略去行尾注释（字符串里的 // 误伤可接受）
-            for (m in call.findAll(line)) {
+            // 本行定义了哪些函数名（一次 findAll，不再每处命中现编正则）
+            val defined = FUNC_DEF_RE.findAll(line).map { it.groupValues[1] }.toSet()
+            for (m in CALL_RE.findAll(line)) {
                 val name = m.groupValues[1]
-                if (Regex("""\bfunction\s+$name\s*\(""").containsMatchIn(line)) continue // 自带定义
+                if (name in defined) continue // 自带定义
                 // await 直接修饰合法；async 函数里 return 一个 Promise 也合法（自动吸收）
                 val before = line.substring(maxOf(0, m.range.first - 9), m.range.first)
                     .trimEnd()

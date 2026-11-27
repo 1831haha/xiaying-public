@@ -64,7 +64,7 @@ object FollowStore {
      * v0.186.0：读改写同一把锁——follow/unfollow/mark 系列的读表加写盘全程串行，
      * UI 与 FollowCheckWorker 并发写同一 prefs 时后写者不再覆盖先写者的改动。
      * 纯读（readSync/getWatchedEpisode）不动：SharedPreferences 单值读是原子的，
-     * commit 写盘同步可见；init 的 Synchronized 守门与开关单值读写也不重复加锁。
+     * apply 内存态同步可见；init 的 Synchronized 守门与开关单值读写也不重复加锁。
      */
     private val mutex = Mutex()
 
@@ -288,14 +288,18 @@ object FollowStore {
     }
 
     /**
-     * v0.170.0：commit 同步写盘并返回成败——apply 的失败是静默的，
-     * follow()/unfollow() 原先永远返回 true，写盘失败也谎报成功。
-     * 全部调用方已在 Dispatchers.IO 上，主线程不走这里。
+     * v1.4.34 D-P2-1：apply 异步写盘并返回 true（已入队）——原来 commit 同步写盘，
+     * 持 Mutex 时阻塞所有追剧写操作；调用方本就在 Dispatchers.IO 上，但
+     * commit 的磁盘同步仍会把一次追剧/取消的耗时摊到锁里。apply 的内存态
+     * 立即更新（refreshFlow 的重读不受影响），写盘失败静默是已知代价：
+     * SharedPreferences 写盘失败本就极少，且返回值原先“失败报 false”的
+     * 语义在此让位于“不持锁等磁盘”；真失败时下次写盘会重带全量数据。
      */
     private fun writeAll(context: Context, list: List<FollowItem>): Boolean {
-        return prefs(context).edit()
+        prefs(context).edit()
             .putString(KEY_LIST, json.encodeToString(ListSerializer(FollowItem.serializer()), list))
-            .commit()
+            .apply()
+        return true
     }
 
     private fun refreshFlow(context: Context) {

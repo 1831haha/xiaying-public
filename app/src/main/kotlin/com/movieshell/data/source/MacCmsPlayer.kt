@@ -50,7 +50,10 @@ object MacCmsPlayer {
         else -> raw.replace("\\/", "/")
     }
 
-    /** 纯函数：JS unescape（%XX 与 %uXXXX；非法序列原样保留）。 */
+    /** 纯函数：JS unescape（%XX 与 %uXXXX；非法序列原样保留）。
+     * v1.4.34 D-P2-4：码点 0（%00 / %u0000）直接丢弃——原来拼进一个
+     * NUL 字符，URL 里带控制字符会被 OkHttp 拒掉；丢弃比原样保留
+     * "%00" 更干净（播放地址里 NUL 本就不携带信息）。 */
     fun unescape(s: String): String {
         val sb = StringBuilder(s.length)
         var i = 0
@@ -58,9 +61,17 @@ object MacCmsPlayer {
             val c = s[i]
             if (c == '%') {
                 val u = if (s.length >= i + 6 && (s[i + 1] == 'u' || s[i + 1] == 'U')) s.substring(i + 2, i + 6).toIntOrNull(16) else null
-                if (u != null) { sb.append(u.toChar()); i += 6; continue }
+                if (u != null) {
+                    if (u != 0) sb.append(u.toChar())
+                    i += 6
+                    continue
+                }
                 val h = if (s.length >= i + 3) s.substring(i + 1, i + 3).toIntOrNull(16) else null
-                if (h != null) { sb.append(h.toChar()); i += 3; continue }
+                if (h != null) {
+                    if (h != 0) sb.append(h.toChar())
+                    i += 3
+                    continue
+                }
             }
             sb.append(c)
             i++
@@ -68,7 +79,12 @@ object MacCmsPlayer {
         return sb.toString()
     }
 
-    /** 纯函数：解出的地址补全（`//x` → https:，相对地址按页面补全）；非 http 返回 null。 */
+    /** 纯函数：解出的地址补全（`//x` → https:，相对地址按页面补全）；非 http 返回 null。
+     * v1.4.34 D-P2-3：无前导斜杠的相对地址也解析——原来只认 `/` 开头，
+     * `a.m3u8` / `play/x.mp4` / `../up.m3u8` 一律返回 null走嗅探。
+     * 按当前页路径拼接（URI.resolve 口径）。裸词（无 `/` 也无 `.`，如
+     * `abc123`）仍返回 null：那更像占位 token 不是地址，解析出来只会
+     * 送播放器撞 404，不如留给嗅探兜底。 */
     fun absolutize(url: String, page: String): String? {
         val u = url.trim()
         val abs = when {
@@ -76,6 +92,9 @@ object MacCmsPlayer {
             u.startsWith("//") -> "https:$u"
             u.startsWith("/") && page.contains("://") ->
                 page.substringBefore("://") + "://" + page.substringAfter("://").substringBefore('/') + u
+            (u.contains('/') || u.contains('.')) && page.contains("://") ->
+                runCatching { java.net.URI(page).resolve(u)?.toString() }.getOrNull()
+                    ?: return null
             else -> return null
         }
         return abs

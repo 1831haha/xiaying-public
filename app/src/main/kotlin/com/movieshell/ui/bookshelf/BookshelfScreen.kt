@@ -381,6 +381,8 @@ fun BookshelfScreen(
     val pickTxt = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         importing = true
+        // v1.4.34 D-P2-6：本次 TXT 导入的截断提示（runCatching 内写、外面拼进 Toast）
+        var importWarnings: List<String> = emptyList()
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
@@ -449,12 +451,14 @@ fun BookshelfScreen(
                     if (!NovelStore.addNovel(context, imported.novel, imported.chapters)) {
                         return@runCatching "failed"
                     }
+                    // v1.4.34 D-P2-6：TXT 导入的截断提示随成功 Toast 一起出
+                    importWarnings = imported.warnings
                     "added"
                 }.getOrDefault("failed")
             }
             importing = false
             PluginUi.toast(context, when (result) {
-                "added" -> "已加入书架"
+                "added" -> "已加入书架" + importWarnings.joinToString("") { "（${it}）" }
                 "exists" -> "已在书架，跳过重复导入"
                 "not_txt" -> "只支持 .txt / .epub 文件，请重新选择"
                 "invalid" -> "导入失败：读不到有效文本"

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v1.4.34 D-P2-12：平板/分屏（最小宽 600dp）基础适配——详情页选集网格 3 列改 5 列，
+         其余网格多为 Adaptive 已随宽度自适应；不做全套平板布局。 -->
+    <integer name="episode_grid_columns">5</integer>
+</resources>

@@ -131,6 +131,14 @@ object DanmakuSource {
     }
 
     /**
+     * v1.4.34 D-P2-10：弹幕磁盘缓存 key（纯函数）——标题前 30 字 + 全标题
+     * SHA-256 前 12 位 + 集数。前 30 字相同的长标题不再共用一份缓存。
+     * 老 key 的缓存文件不迁移，7 天过期后由清理逻辑清掉。
+     */
+    internal fun cacheKeyFor(title: String, episode: Int): String =
+        "${title.take(30)}_${SafeFileName.sha256Hex(title).take(12)}_E$episode"
+
+    /**
      * 按标题搜弹幕。返回按 timeMs 排序的列表；搜不到/失败返回空。
      * episode 用于多集时尽量匹配对应集（弹弹play 按番剧+集数取）。
      *
@@ -390,13 +398,6 @@ object DanmakuSource {
         if (inter == 0) return 0.0
         return 2.0 * inter / (sa.size + sb.size)
     }
-
-    /**
-     * v1.4.34 B-P1-10：缓存 key 用完整标题——原 take(30) 会让前 30 字相同
-     * 的不同剧共用一份缓存（SafeFileName 的摘要只对截断后的 key 算，
-     * 截断前已撞名）；文件名唯一性仍由 SafeFileName 的 SHA-256 摘要保证。
-     */
-    internal fun cacheKeyFor(title: String, episode: Int): String = "${title}_E$episode"
 
     private fun fetchComments(animeId: Long, episode: Int): List<Comment> {
         val req = Request.Builder()

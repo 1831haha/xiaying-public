@@ -42,19 +42,20 @@ object NovelPurifyEngine {
         sourceKey: String = "",
     ): String {
         // v1.2.28：换行符归一（对标阅读 ContentProcessor 的内置步骤，不是用户规则）：
-        // 正文里字面量 \r（反斜杠+r）与真实 \r 一律归一成 \n，再按行切段。
+        // 正文里字面量 \r（反斜杠+r）与真实 \r 一律归一成段落分隔。
         // 真机制（黑岩 #破冰字节级实证）：站方 JSON 是标准单层转义，\r 是合法
-        // 转义不是双重转义；以前 App 取值链没按 JSON 路径求值，readabilityText
-        // 直接对原始 JSON 文本提字，转义才以字面量漏上屏。根因修在
-        // evalChapterText/extractChapterText 的 JSON 路径求值（evalJsonRule），
-        // 这里是兜底：任何残留的字面量/真实换行符都不许进屏幕。
+        // 转义不是双重转义；根因修在 evalJsonRule 的 JSON 路径求值，这里是兜底：
+        // 任何残留的字面量/真实换行符都不许进屏幕。
+        // v1.4.34 D-P2-7：归一目标从单换行改成双换行——\r / 字面量 \r\n
+        // 在原文里就是段落分隔；单换行只留给原文真正的行内换行（诗歌/
+        // 对白），收尾的 collapseBlankLines 不再动它。
         // 字面量 \r\n 先换，避免拆成两个换行。
         var out = text
-            .replace("\\r\\n", "\n")
-            .replace("\\r", "\n")
-            .replace("\\n", "\n")
-            .replace("\r\n", "\n")
-            .replace('\r', '\n')
+            .replace("\\r\\n", "\n\n")
+            .replace("\\r", "\n\n")
+            .replace("\\n", "\n\n")
+            .replace("\r\n", "\n\n")
+            .replace("\r", "\n\n")
         for (r in rules) {
             if (!r.enable || r.regex.isBlank()) continue
             if (!scopeMatch(r, bookUrl, sourceKey)) continue
@@ -62,11 +63,44 @@ object NovelPurifyEngine {
             out = runCatching { out.replace(regexOf(r.regex), r.replacement) }
                 .getOrDefault(out)
         }
-        // 收尾：多余空行合并，段首缩进统一（与 BookRuleEngine.extractContent 格式对齐）
-        return out.split("\n")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString("\n\n") { "　　$it" }
+        // 收尾：只合并“多余”空行（连续 2 个以上空行 → 1 个），其余版式原样保留。
+        // v1.4.34 D-P2-7：原来这里把每行都 trim 后滤掉空行、再以 \n\n + 首行缩进
+        // 重排全篇——诗歌/对白的行内单换行全被改写成段落间隔，内置规则
+        // “合并多余空行”（\n{3,} → \n\n）也因收尾重排而实际失效。
+        // 新口径：先按空行切“块”（段落/诗节），块内单换行原样保留，
+        // 块间只留一个空行；缩进只加在每块首行。
+        // 注意：\r 归一那步已把 \r / 字面量 \r\n 等换成段落分隔（见上文），
+        // 所以这里见到的单 \n 只来自原文真正的行内换行。
+        return collapseBlankLines(out)
+    }
+
+    /**
+     * v1.4.34 D-P2-7（纯函数）：空行折叠 + 块首缩进。
+     * - 连续 2 个以上空行压成 1 个（即 3 连以上换行 → 双换行）；
+     * - 块内各行只 trim、不重排，单换行保留（诗歌/对白版式）；
+     * - 每块首行加全角缩进，后续行不加；
+     * - 首尾空行丢掉。
+     */
+    internal fun collapseBlankLines(text: String): String {
+        val lines = text.split("\n")
+        val blocks = ArrayList<List<String>>()
+        var cur = ArrayList<String>()
+        for (raw in lines) {
+            val line = raw.trim()
+            if (line.isEmpty()) {
+                if (cur.isNotEmpty()) {
+                    blocks.add(cur)
+                    cur = ArrayList()
+                }
+            } else {
+                cur.add(line)
+            }
+        }
+        if (cur.isNotEmpty()) blocks.add(cur)
+        return blocks.joinToString("\n\n") { block ->
+            block.mapIndexed { i, line -> if (i == 0) "　　$line" else line }
+                .joinToString("\n")
+        }
     }
 
     private fun scopeMatch(r: PurifyRule, bookUrl: String, sourceKey: String): Boolean =

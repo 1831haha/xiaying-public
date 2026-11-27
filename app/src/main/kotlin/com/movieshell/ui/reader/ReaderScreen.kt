@@ -170,6 +170,35 @@ fun preloadIndices(center: Int, total: Int, ahead: Int = PRELOAD_AHEAD_COUNT): L
     return (start..end).toList()
 }
 
+/** v1.4.34 D-P2-9：正文在内存里往前留几章（滚动模式窗口化用）。 */
+const val CONTENT_WINDOW_BEHIND = 2
+
+/**
+ * v1.4.34 D-P2-9：正文内存窗口（纯函数）——只保留 [center] 前后窗口内
+ * 章节的 content，窗口外置空（目录、标题、下标、地址一律不动）。
+ * 无内容被清掉时原样返回同一列表，调用方可用 `!==` 判是否要写回状态。
+ * 窗口外章节的正文下次进窗口时由 fetchChapter 从磁盘缓存补回，不走网络。
+ */
+fun retainContentWindow(
+    chapters: List<Chapter>,
+    center: Int,
+    behind: Int = CONTENT_WINDOW_BEHIND,
+    ahead: Int = PRELOAD_AHEAD_COUNT,
+): List<Chapter> {
+    if (chapters.isEmpty()) return chapters
+    val lo = (center - behind).coerceAtLeast(0)
+    val hi = minOf(center + ahead, chapters.size - 1)
+    var changed = false
+    val out = chapters.mapIndexed { i, c ->
+        if (i in lo..hi || c.content.isBlank()) c
+        else {
+            changed = true
+            c.copy(content = "")
+        }
+    }
+    return if (changed) out else chapters
+}
+
 /** v0.211.0 审计修复：详情目录点某章要直达该章——路由只带
  *  书 id、不带章节参数，原来目录点击只能按旧进度打开。书架点
  *  目录时先把目标章写进这个一次性请求，阅读器载入时消费它
@@ -384,8 +413,21 @@ fun ReaderScreen(
      * v0.251.0：force 供刷新本章绕过“已有正文跳过”；净化后空白不写盘、不覆盖旧正文。 */
     suspend fun fetchChapter(index: Int, allowGate: Boolean, force: Boolean = false): ContentFail? {
         val c = chapters.getOrNull(index) ?: return ContentFail.UNKNOWN
-        if ((!force && c.content.isNotBlank()) || c.url.isBlank()) return null
+        if (!force && c.content.isNotBlank()) return null
         val n = novel ?: return ContentFail.UNKNOWN
+        // v1.4.34 D-P2-9：先读磁盘缓存——窗口化后内存里只有窗口内正文，
+        // 窗口外章节（尤其本地书、已缓存的在线章节）先从磁盘补，不直接
+        // 走网络；磁盘也没有才往下走网络拉取。force（刷新本章）跳过这步。
+        if (!force) {
+            val disk = runCatching {
+                withContext(Dispatchers.IO) { NovelStore.chapter(context, n.id, index)?.content }
+            }.onFailure { if (it is CancellationException) throw it }.getOrNull().orEmpty()
+            if (disk.isNotBlank()) {
+                chapters = chapters.map { if (it.index == index) it.copy(content = disk) else it }
+                return null
+            }
+        }
+        if (c.url.isBlank()) return null
         // v1.4.27 解缠③：拉正文→全局净化→空白保护→写盘统一走 NovelContentService（单入口），
         // 本处只管把结果落到阅读器内存态；顺序与口径见 NovelContentService 注释。
         val engine = runCatching { NovelSourceEngine.novelEngineForKey(context, n.sourceKey) }
@@ -413,7 +455,9 @@ fun ReaderScreen(
     // v0.251.0：force 供刷新本章；onSuccess 供窗口加载在当前章成功后触发邻章预载。
     fun ensureContent(index: Int, force: Boolean = false, onSuccess: (() -> Unit)? = null) {
         val c = chapters.getOrNull(index) ?: return
-        if ((!force && c.content.isNotBlank()) || c.url.isBlank()) return
+        // v1.4.34 D-P2-9：url 为空也不再直接跳过——本地书正文在磁盘，
+        // fetchChapter 会先从磁盘补（窗口化后内存里可能没它）。
+        if (!force && c.content.isNotBlank()) return
         if (!force && failedChapters.containsKey(index)) return
         if (!loadingChapters.add(index)) return
         // v0.270.0（T20）：新一单先取消旧一单，世代号只认最新——旧单的
@@ -455,7 +499,9 @@ fun ReaderScreen(
      * v0.251.0：失败章记入会话失败记忆，本次会话不再自动重拉。 */
     fun loadChapterSilent(index: Int) {
         val c = chapters.getOrNull(index) ?: return
-        if (c.content.isNotBlank() || c.url.isBlank()) return
+        // v1.4.34 D-P2-9：url 为空也不再直接跳过——本地书正文在磁盘，
+        // fetchChapter 会先从磁盘补（窗口化后内存里可能没它）。
+        if (c.content.isNotBlank()) return
         if (failedChapters.containsKey(index)) return
         if (!loadingChapters.add(index)) return
         // v1.2.14：Job 在 launch 返回后同步登记——登记与启动之间没有挂起点，
@@ -559,13 +605,21 @@ fun ReaderScreen(
             BookSourceManager.load(context)
         }
         novel = n
-        chapters = cs
         // v1.1.10：换源重载后旧源的段评作废——不清会把旧源评论挂在新源章节下。
         paraCommentsByChapter.clear()
         // v0.211.0 审计修复：目录直达——有一次性跳转请求时优先用它，
         // 而不是按旧进度恢复；无请求时走原有进度恢复。
         val jump = ReaderJumpRequest.chapter
         ReaderJumpRequest.chapter = null
+        // v1.4.34 D-P2-9：起始章先算出来再落内存——滚动模式只留起始章
+        // 窗口内的正文在内存（数千章全书正文常驻是 GC 压力来源），窗口外
+        // 章节的正文由 fetchChapter 按需从磁盘补；翻页模式不动，全局分页
+        // 要顺序排全书，窗口化会逼它逐章现拉。
+        val start = when {
+            jump != null && jump in cs.indices -> jump
+            p != null && p.chapterIndex in cs.indices -> p.chapterIndex
+            else -> 0
+        }
         if (jump != null && jump in cs.indices) {
             chapterIndex = jump
             landing = LandingTarget.Title(jump)
@@ -575,6 +629,7 @@ fun ReaderScreen(
             landing = if (p.charOffset <= 0) LandingTarget.Title(p.chapterIndex)
                 else LandingTarget.Offset(p.chapterIndex, p.charOffset)
         }
+        chapters = if (pageMode == 0) retainContentWindow(cs, start) else cs
         loaded = true
         ensureContentWindow(chapterIndex)
     }
@@ -836,9 +891,33 @@ fun ReaderScreen(
 
     // v0.244.0：视口章节一切换就保证往后 10 章正文在手（滚动模式跟随手指，
     // 翻页模式跟随页码；定位目标章由 locate 另外保证）。v1.2.14：窗口由前后各 2 章改成只往后 10 章。
+    // v1.4.34 D-P2-9：滚动模式下先清窗口外正文再补窗口——长会话里内存只留
+    // 当前章前后窗口；翻页模式不动（全局分页要顺序排全书、往回翻也要正文在手）。
     LaunchedEffect(chapterIndex, loaded) {
         if (!loaded) return@LaunchedEffect
+        if (pageMode == 0) {
+            val stripped = retainContentWindow(chapters, chapterIndex)
+            if (stripped !== chapters) chapters = stripped
+        }
         ensureContentWindow(chapterIndex)
+    }
+
+    // v1.4.34 D-P2-9：滚动切翻页时一次把窗口外正文从磁盘补回内存——全局分页
+    // 要顺序排全书，窗口化留下的空白章会逼它逐章现拉（每章一次整文件解析）；
+    // 磁盘是事实源（拉到的正文都先写盘才进内存），一次全量读盘即补齐。
+    // 切回滚动模式时不主动清，章切换效果会按窗口收掉。
+    LaunchedEffect(pageMode, loaded) {
+        if (!loaded || pageMode == 0) return@LaunchedEffect
+        if (chapters.none { it.content.isBlank() }) return@LaunchedEffect
+        val disk = runCatching {
+            withContext(Dispatchers.IO) { NovelStore.chapters(context, novelId) }
+        }.onFailure { if (it is CancellationException) throw it }.getOrNull().orEmpty()
+        if (disk.isEmpty()) return@LaunchedEffect
+        val diskByIndex = disk.associateBy { it.index }
+        chapters = chapters.map { c ->
+            val d = diskByIndex[c.index]
+            if (c.content.isBlank() && d != null && d.content.isNotBlank()) c.copy(content = d.content) else c
+        }
     }
 
     // v1.1.10：结构化段评——章切换时源支持就后台拉一次；失败静默（入口不显示，
