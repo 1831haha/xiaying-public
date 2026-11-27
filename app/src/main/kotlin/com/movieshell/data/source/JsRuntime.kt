@@ -168,16 +168,23 @@ object JsRuntime {
         return sandbox
     }
 
-    /** App 退出时关闭（进程级单例，一般不需要显式调）。 */
+    /**
+     * App 退出时关闭（进程级单例，一般不需要显式调）。
+     * v1.4.34 B-P1-13：关闭走后台守护线程——原同步 get(5s) 会挂住调用线程；
+     * 核实：目前生产代码无任何调用方（仅退出收尾用），改异步后任何调用方
+     * 都安全；future 已从槽位清掉，不影响下次重连；进程退出时系统自会回收。
+     */
     fun close() {
-        val f = synchronized(lock) { sandboxFuture.also { sandboxFuture = null } }
-        // v0.188.0 M12：此前裸 f.get() 无超时，绑定中的 future 会把调用线程
-        // 无限挂住。5 秒拿不到已连接的 sandbox 即放弃关闭、只记日志——
-        // future 已从槽位清掉，不影响下次重连；进程退出时系统自会回收。
-        runCatching { f?.get(CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS)?.close() }
-            .onFailure {
-                if (it is InterruptedException) Thread.currentThread().interrupt()
-                Log.w(TAG, "sandbox close 超时/失败: ${it.message}")
-            }
+        val f = synchronized(lock) { sandboxFuture.also { sandboxFuture = null } } ?: return
+        Thread({
+            // v0.188.0 M12：此前裸 f.get() 无超时，绑定中的 future 会把调用线程
+            // 无限挂住。5 秒拿不到已连接的 sandbox 即放弃关闭、只记日志——
+            // future 已从槽位清掉，不影响下次重连；进程退出时系统自会回收。
+            runCatching { f.get(CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS)?.close() }
+                .onFailure {
+                    if (it is InterruptedException) Thread.currentThread().interrupt()
+                    Log.w(TAG, "sandbox close 超时/失败: ${it.message}")
+                }
+        }, "JsRuntime-close").apply { isDaemon = true }.start()
     }
 }

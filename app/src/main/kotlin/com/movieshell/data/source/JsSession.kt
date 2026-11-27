@@ -271,6 +271,12 @@ internal class JsSession(private val logTag: String) {
         val kind = m.optString("kind")
         val id = m.optLong("id", -1L)
         if (id >= 0) {
+            // v1.4.34 B-P1-2（核实：报告称 pendingRpc“0 处 remove”是误报——
+            // finally 里一直有 remove，见下；closeIsolate 也整体 clear）：
+            // 唯一残留口子是会话失效后才到的消息：scope 已取消时 launch 体
+            // 不执行、finally 不跑，登记项会残留到会话丢弃。失效会话的 JS 侧
+            // 本就要回收，新 RPC 直接丢弃，不登记。
+            if (isInvalid) return
             val handler = rpcHandlers[kind]
             pendingRpc[id] = true
             scope.launch {
