@@ -190,6 +190,13 @@ private sealed class LandingTarget {
     data class LastText(override val chapter: Int) : LandingTarget()
 }
 
+/** v1.4.34 B-P1-3：分页前沿章停滞上限与退避基数（见 ReaderScreen 分页 effect）。 */
+private const val MAX_PAGINATION_STALLS = 3
+private const val PAGINATION_STALL_BACKOFF_MS = 1000L
+
+/** v1.4.34 B-P1-3：分页前沿章停滞计数（chapter=-1 表示无停滞）。 */
+private class PaginationStallTracker(var chapter: Int = -1, var count: Int = 0)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderScreen(
@@ -607,6 +614,9 @@ fun ReaderScreen(
     var pagination by remember { mutableStateOf(BookPagination.empty(0)) }
     val pagerState = rememberPagerState(pageCount = { pagination.displayPageCount.coerceAtLeast(1) })
     val textMeasurer = rememberTextMeasurer()
+    // v1.4.34 B-P1-3：分页前沿章停滞计数（remember 存活，effect 重启不丢；
+    // 非 State，不触发重组）。前沿章一有正文进展即清零（见循环内复位）。
+    val paginationStall = remember { PaginationStallTracker() }
     // v0.244.0：全局分页增量构建（只翻页模式跑）：从 frontier 起每帧排 5 章，
     // 遇到未到正文的章先静默拉取、等正文到了再续；样式/尺寸/布局版本一变
     // 就整体重建（key 对不上时先清零再排，不把新旧样式的页混在一起）。
@@ -623,9 +633,25 @@ fun ReaderScreen(
             if (cur.fullyDone || innerWidthPx <= 0 || innerHeightPx <= 0f) break
             val next = chapters.getOrNull(cur.frontierChapter) ?: break
             if (next.content.isBlank() && next.url.isNotBlank()) {
+                // v1.4.34 B-P1-3：前沿章未缓存时退避重试。核实：报告称“近零间隔
+                // 忙轮询”不准确——本循环每批以 withFrameNanos 让出一帧，且
+                // 拉取失败不改 chapters、effect 不会因此重启；真正的缺口是
+                // 无退避、无上限。同一章连续多轮仍无正文时指数退避（1s/2s/3s，
+                // 最多 3 次）后本轮收手；delay 只挂起协程，不占主线程。
+                // 正文到了则 chapters 变化重启 effect，本延迟随之取消。
+                if (paginationStall.chapter != next.index) {
+                    paginationStall.chapter = next.index
+                    paginationStall.count = 0
+                }
+                if (paginationStall.count >= MAX_PAGINATION_STALLS) break
+                paginationStall.count++
                 loadChapterSilent(next.index)
-                break
+                delay(PAGINATION_STALL_BACKOFF_MS * paginationStall.count.toLong())
+                continue
             }
+            // 有进展即清零：前沿章已排或已换章，旧停滞计数作废。
+            paginationStall.chapter = -1
+            paginationStall.count = 0
             pagination = paginateChapterRange(
                 measurer = textMeasurer,
                 chapters = chapters,
