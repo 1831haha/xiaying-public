@@ -151,4 +151,29 @@ class CrossSourceResumeTest {
         assertTrue(CrossSourceResume.excludedKeys().isEmpty())
         assertTrue(CrossSourceResume.begin("斗破苍穹", 4, setOf("sub:a")))
     }
+
+    @Test
+    fun `clearIfChainActive only clears a chain in progress`() {
+        // TA 复核 1a：刚开的新会话（hops==0）不清；跳过一次后才清。
+        assertTrue(CrossSourceResume.begin("斗破苍穹", 4, setOf("sub:a")))
+        CrossSourceResume.clearIfChainActive()
+        assertEquals(setOf("sub:a"), CrossSourceResume.excludedKeys())
+        CrossSourceResume.recordHop("sub:b")
+        CrossSourceResume.clearIfChainActive()
+        assertTrue(CrossSourceResume.excludedKeys().isEmpty())
+        assertTrue(CrossSourceResume.begin("斗破苍穹", 4, setOf("sub:a")))
+    }
+
+    @Test
+    fun `clearIfChainActive clears renamed show and clamped episode`() {
+        // TA 复核 1a：跨站改名/集数被限定后，逐字比对的 clearIfActiveFor
+        // 清不掉，clearIfChainActive 只认 hops>0，能清掉。
+        assertTrue(CrossSourceResume.begin("斗破苍穹", 4, setOf("sub:a")))
+        CrossSourceResume.recordHop("sub:b")
+        assertTrue(CrossSourceResume.begin("斗破苍穹 2024", 5, setOf("sub:b")))
+        CrossSourceResume.clearIfActiveFor("斗破苍穹 2024", 5)
+        assertEquals(setOf("sub:a", "sub:b"), CrossSourceResume.excludedKeys())
+        CrossSourceResume.clearIfChainActive()
+        assertTrue(CrossSourceResume.excludedKeys().isEmpty())
+    }
 }

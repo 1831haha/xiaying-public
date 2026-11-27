@@ -10,7 +10,7 @@ package com.movieshell.player
  *
  * 本会话补三件事（只管跨源这一段，同源内换线路/换内核一字不动）：
  * 1. 搜目标用干净剧名（PlayerScreen 优先传 infoName，没有时剥 title 的集数后缀）；
- * 2. 同剧同集连续失败时排除已试过的源（含当前源），按健康分往下顺延；
+ * 2. 同一链内连续失败时排除已试过的源（含当前源），按健康分往下顺延；
  * 3. 上限 MAX_HOPS 跳，跳满落回原报错，不死循环；播稳 20 秒才清会话。
  *
  * v1.4.33 TA 审码修（M1–M3/S1/S2/S6）：
@@ -22,10 +22,10 @@ package com.movieshell.player
  * - S6：recordHop 刷新 startedAtMs，慢链路不中途过期。
  */
 object CrossSourceResume {
-    /** 同剧同集最多换几个源（含第一次换源）；跳满后落回原报错。 */
+    /** 同一链（任意剧或集）最多换几个源（含第一次换源）；跳满后落回原报错。 */
     const val MAX_HOPS = 3
 
-    /** 会话有效期：播稳后清掉；5 分钟内同一集又失败算同一轮。 */
+    /** 会话有效期：播稳后清掉；5 分钟内同一链又失败算同一轮。 */
     const val SESSION_TTL_MS = 5 * 60 * 1000L
 
     /**
@@ -149,5 +149,18 @@ object CrossSourceResume {
     @Synchronized
     fun clearIfActiveFor(showName: String, episodeIndex: Int) {
         if (this.showName == showName && this.episodeIndex == episodeIndex) clear()
+    }
+
+    /**
+     * TA 复核 1a：播稳 20 秒后清会话——只认“本轮链还在”（hops>0），
+     * 不比片名/集数。M2 之后跨站改名（斗破苍穹 2024、斗破苍穹·年番）
+     * 或集数被限定到别的下标时，clearIfActiveFor 逐字比对不上，
+     * 播稳也清不掉，5 分钟内任何失败都会沿用旧链。不要在 begin 里
+     * 更新 showName，那会把 M3 consumePendingPos 的严格片名语义
+     * 一起改掉。
+     */
+    @Synchronized
+    fun clearIfChainActive() {
+        if (hops > 0) clear()
     }
 }

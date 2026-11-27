@@ -972,9 +972,9 @@ fun PlayerScreen(
             PySourceManager.activeRuleName()?.let { add("$LOCAL_PY_PREFIX$it") }
             PhpSourceManager.activeRuleName()?.let { add("php:$it") }
         }
-        // v1.4.33：同剧同集跳满 3 个源即停，不死循环；当前源一并记进已试集合。
+        // v1.4.33：同一链跳满 3 个源即停，不死循环；当前源一并记进已试集合。
         if (!CrossSourceResume.begin(target, epIdx, currentKeys)) {
-            AppToast.show(context, "已试过多个源，仍无法播放", long = false)
+            AppToast.show(context, "刚换过多个源，请稍后再试", long = false)
             errorMsg = fallbackMsg
             return
         }
@@ -983,7 +983,8 @@ fun PlayerScreen(
         scope.launch {
             // v1.4.33 S3：会话内复用同一个 SiteRepository——每跳都 new +
             // 全量 loadFromConfig 会重解析整份订阅 JSON；新会话（hopCount==0）
-            // 或 repo 为空时才重建加载。
+            // 或 repo 为空时才重建加载。注意：每跳都是新详情页，remember
+            // 带不过去，跨页不生效，只有同页二次换源才命中复用。
             val repo = crossSourceRepo.takeIf { CrossSourceResume.hopCount() > 0 }
                 ?: SiteRepository(
                     drpyEngine = DrpySourceManager.drpyEngineAdapter,
@@ -2794,6 +2795,8 @@ fun PlayerScreen(
         var scrubPos by remember { mutableLongStateOf(0L) }
         // v1.4.33 M1：连续播稳的轮询次数（40×500ms=20s 才算播稳，见下方轮询块）。
         var playTicks by remember { mutableIntStateOf(0) }
+        // v1.4.33 TA 复核 1b：上一次轮询读到的位置（毫秒），播稳计数看增量。
+        var lastPos by remember { mutableLongStateOf(0L) }
         LaunchedEffect(engine, playUrl) {
             while (true) {
                 delay(500)
@@ -2807,14 +2810,24 @@ fun PlayerScreen(
                 // v1.4.33 M1：连续播稳 20 秒才清会话——isPlaying 只代表已进入
                 // READY，不等于播稳了；目标源播几秒又挂（限速/分片 403）时不
                 // 清会话，否则下次失败重开会话、已试源全部回候选，3 跳上限
-                // 被绕过。断点续播第一帧 pos 就 >15s，不能用 pos 判播稳，
-                // 只数连续播放的轮询次数（40×500ms=20s）。
-                if (isPlaying && !isLive) playTicks++ else playTicks = 0
+                // 被绕过。断点续播第一帧 pos 就 >15s，不能用 pos 绝对值判播稳。
+                // TA 复核 1b：libmpv 下 isPlaying 卡住也不变 false（paused 只在
+                // 用户暂停/EOF/异常时置位，缓冲或卡住不置 false），光数
+                // isPlaying 会把卡 20 秒误判成播稳。改看位置是否在推进：
+                // 每 500ms 读一次位置，只有 isPlaying 且位置前进（增量 <2s，
+                // 过滤 seek 跳变）才计数，否则清零。断点续播第一帧 pos 大
+                // 不受影响（看增量不看绝对值）。
+                val p = EngineHost.currentPosition()
+                val advancing = isPlaying && !isLive && p > lastPos && p - lastPos < 2000
+                if (advancing) playTicks++ else playTicks = 0
+                lastPos = p
                 if (playTicks >= 40) {
-                    CrossSourceResume.clearIfActiveFor(resumeShowName, PlaySession.episodeIndex)
+                    // TA 复核 1a：只认“本轮链还在”（hops>0），不比片名/集数——
+                    // 跨站改名或集数被限定后 clearIfActiveFor 逐字比对不上。
+                    CrossSourceResume.clearIfChainActive()
                     playTicks = 0
                 }
-                if (!scrubbing) pos = EngineHost.currentPosition()
+                if (!scrubbing) pos = p
                 dur = EngineHost.duration()
             }
         }
