@@ -130,6 +130,14 @@ object DanmakuSource {
     }
 
     /**
+     * v1.4.34 D-P2-10：弹幕磁盘缓存 key（纯函数）——标题前 30 字 + 全标题
+     * SHA-256 前 12 位 + 集数。前 30 字相同的长标题不再共用一份缓存。
+     * 老 key 的缓存文件不迁移，7 天过期后由清理逻辑清掉。
+     */
+    internal fun cacheKeyFor(title: String, episode: Int): String =
+        "${title.take(30)}_${SafeFileName.sha256Hex(title).take(12)}_E$episode"
+
+    /**
      * 按标题搜弹幕。返回按 timeMs 排序的列表；搜不到/失败返回空。
      * episode 用于多集时尽量匹配对应集（弹弹play 按番剧+集数取）。
      *
@@ -139,7 +147,7 @@ object DanmakuSource {
     suspend fun fetch(title: String, episode: Int = 1): List<Danmaku> = withContext(Dispatchers.IO) {
         try {
             // v0.55：先查磁盘缓存
-            val cacheKey = "${title.take(30)}_E$episode"
+            val cacheKey = cacheKeyFor(title, episode)
             loadCache(cacheKey)?.let {
                 LogBus.i(TAG, "弹幕磁盘缓存命中：$title E$episode -> ${it.size} 条")
                 return@withContext it
